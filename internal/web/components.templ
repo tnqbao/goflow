@@ -1,0 +1,13 @@
+package web
+
+templ Badge(label string) {
+	<span class="badge">{ label }</span>
+}
+
+templ EmptyState(title, description string) {
+	<section class="empty-state" aria-label={ title }>
+		<div class="empty-state-mark" aria-hidden="true">✳</div>
+		<h2>{ title }</h2>
+		<p>{ description }</p>
+	</section>
+}

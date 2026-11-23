@@ -1,0 +1,28 @@
+package web
+
+templ Layout(title string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title } · GoFlow</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+			<script src="/static/htmx.min.js" defer></script>
+		</head>
+		<body>
+			<a class="skip-link" href="#main-content">Skip to content</a>
+			<div class="app-shell">
+				<aside class="sidebar" aria-label="Workspace">
+					<a class="brand" href="/" aria-label="GoFlow home">GoFlow<span aria-hidden="true">.</span></a>
+					<p class="sidebar-label">Workspace</p>
+					<div class="sidebar-item" aria-current="page">Projects</div>
+					<p class="sidebar-note">Project management is coming soon.</p>
+				</aside>
+				<main id="main-content" class="main-content" tabindex="-1">
+					{ children... }
+				</main>
+			</div>
+		</body>
+	</html>
+}

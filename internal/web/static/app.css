@@ -1,15 +1,65 @@
 :root {
 	font-family: system-ui, sans-serif;
-	color: #202124;
-	background: #faf9f7;
+	color: #262b29;
+	background: #f8f8f5;
+	line-height: 1.5;
 }
 
-body {
-	margin: 0;
+* { box-sizing: border-box; }
+body { margin: 0; }
+a { color: inherit; }
+
+:focus-visible {
+	outline: 3px solid #377969;
+	outline-offset: 3px;
 }
 
-main {
-	max-width: 60rem;
-	margin: 0 auto;
+.skip-link {
+	position: absolute;
+	top: -5rem;
+	left: 1rem;
+	z-index: 1;
+	padding: .6rem 1rem;
+	background: #fff;
+}
+.skip-link:focus { top: 1rem; }
+
+.app-shell { display: flex; min-height: 100vh; }
+.sidebar {
+	width: 15rem;
+	flex: none;
 	padding: 2rem 1.5rem;
+	background: #f0f1eb;
+	border-right: 1px solid #e2e5dd;
+}
+.brand { font-size: 1.5rem; font-weight: 750; letter-spacing: -.06em; text-decoration: none; }
+.brand span { color: #5d8e76; }
+.sidebar-label, .eyebrow {
+	margin: 3.5rem 0 .75rem;
+	color: #65716a;
+	font-size: .7rem;
+	font-weight: 700;
+	letter-spacing: .1em;
+	text-transform: uppercase;
+}
+.sidebar-item { padding: .7rem .85rem; border-radius: .6rem; background: #e2e8df; font-weight: 650; }
+.sidebar-note { padding: 0 .85rem; color: #68736c; font-size: .8rem; }
+.main-content { width: 100%; max-width: 76rem; margin: 0 auto; padding: 4rem clamp(1.5rem, 5vw, 5rem); }
+.page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.eyebrow { margin: 0 0 .5rem; }
+h1 { margin: 0; font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -.05em; line-height: 1.1; }
+.page-description { margin: .75rem 0 0; color: #626e66; }
+.badge { flex: none; padding: .35rem .7rem; border-radius: 999px; background: #e6ede6; color: #355e48; font-size: .75rem; font-weight: 650; }
+.empty-state { margin-top: 3rem; padding: clamp(3rem, 8vw, 6rem) 1.5rem; border: 1px solid #e1e5dc; border-radius: 1rem; background: #fff; text-align: center; }
+.empty-state-mark { color: #759b82; font-size: 2.5rem; line-height: 1; }
+.empty-state h2 { margin: 1.5rem 0 .5rem; font-size: 1.25rem; letter-spacing: -.02em; }
+.empty-state p { max-width: 28rem; margin: 0 auto; color: #626e66; }
+
+@media (max-width: 640px) {
+	.app-shell { display: block; }
+	.sidebar { width: auto; padding: 1.25rem 1.5rem; border-right: 0; border-bottom: 1px solid #e2e5dd; }
+	.sidebar-label { margin-top: 1.5rem; }
+	.sidebar-note { margin-bottom: 0; }
+	.main-content { padding-top: 2.5rem; }
+	.page-header { flex-wrap: wrap; }
 }

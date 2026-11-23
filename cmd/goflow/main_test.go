@@ -54,7 +54,7 @@ func TestHomeAssets(t *testing.T) {
 	handler := routes()
 	home := httptest.NewRecorder()
 	handler.ServeHTTP(home, httptest.NewRequest(http.MethodGet, "/", nil))
-	for _, want := range []string{"<h1>GoFlow</h1>", `href="/static/app.css"`, `src="/static/htmx.min.js"`} {
+	for _, want := range []string{"<h1>Projects</h1>", `href="#main-content"`, `id="main-content"`, "Your stories start here", `href="/static/app.css"`, `src="/static/htmx.min.js"`} {
 		if !strings.Contains(home.Body.String(), want) {
 			t.Errorf("home page missing %q", want)
 		}

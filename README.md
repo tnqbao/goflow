@@ -1,6 +1,6 @@
 # GoFlow
 
-GoFlow is a planned self-hosted AI filmmaking workspace. A minimal server-rendered page and health endpoints are available; the workspace features are not implemented yet.
+GoFlow is a planned self-hosted AI filmmaking workspace. A responsive server-rendered workspace shell and health endpoints are available; the workspace features are not implemented yet.
 
 ## Requirements
 

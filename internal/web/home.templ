@@ -1,20 +1,15 @@
 package web
 
 templ Home() {
-	<!DOCTYPE html>
-	<html lang="en">
-		<head>
-			<meta charset="utf-8"/>
-			<meta name="viewport" content="width=device-width, initial-scale=1"/>
-			<title>GoFlow</title>
-			<link rel="stylesheet" href="/static/app.css"/>
-			<script src="/static/htmx.min.js" defer></script>
-		</head>
-		<body>
-			<main>
-				<h1>GoFlow</h1>
-				<p>The filmmaking workspace is coming soon.</p>
-			</main>
-		</body>
-	</html>
+	@Layout("Projects") {
+		<header class="page-header">
+			<div>
+				<p class="eyebrow">Your creative space</p>
+				<h1>Projects</h1>
+				<p class="page-description">A home for your stories, from first idea to final scene.</p>
+			</div>
+			@Badge("Coming soon")
+		</header>
+		@EmptyState("Your stories start here", "Project creation is coming soon. Your workspace will be ready when it arrives.")
+	}
 }
