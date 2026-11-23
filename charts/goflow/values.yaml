@@ -1,0 +1,24 @@
+image:
+  repository: goflow
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  port: 8080
+
+persistence:
+  size: 1Gi
+  # Empty uses the cluster's default StorageClass.
+  storageClass: ""
+
+resources: {}
+
+sharedMemory:
+  size: 1Gi
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: ""
+  tls: []
