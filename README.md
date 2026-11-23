@@ -44,6 +44,10 @@ Ingress is disabled by default. To enable it, provide `--set ingress.enabled=tru
 
 To validate the chart locally, run `helm lint charts/goflow` and `python3 charts/goflow/tests/test_chart.py`. The chart tests require Helm and PyYAML. An actual cluster installation has not been verified here.
 
+## Provider connection foundation
+
+The internal provider contract defines connection operations and session states. A connected state requires a verified provider session. No provider connection or browser automation is implemented yet; Google Flow sign-in remains subject to the feasibility gate.
+
 ## SQLite foundation
 
 The internal database package opens a SQLite file, enables foreign keys for each connection, and applies versioned migrations transactionally. No application tables have been added yet.
