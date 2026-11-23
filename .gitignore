@@ -1,0 +1,11 @@
+# Local binaries and test output
+/bin/
+/goflow
+*.test
+coverage.out
+
+# Local data and browser profiles
+/data/
+*.db
+*.db-shm
+*.db-wal
