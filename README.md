@@ -18,6 +18,10 @@ The server listens on `:8080` and serves the page at `/`. HTMX 2.0.8 and the bas
 
 The planned database path is `/data/goflow.db` and the browser profile path is `/data/browser`. These paths are not created or used yet.
 
+## SQLite foundation
+
+The internal database package opens a SQLite file, enables foreign keys for each connection, and applies versioned migrations transactionally. No application tables have been added yet. Database initialization is not connected to server startup; the database parent directory must exist when using the package.
+
 ## Template generation
 
 After editing a `.templ` file, run `go generate ./internal/web` and commit the generated Go file. The generator version is pinned in the source; the first run downloads it using Go.
