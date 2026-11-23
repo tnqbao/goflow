@@ -6,7 +6,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/a-h/templ"
 	"github.com/tnqbao/goflow/internal/config"
+	"github.com/tnqbao/goflow/internal/web"
 )
 
 func main() {
@@ -29,6 +31,8 @@ func run(addr string) error {
 
 func routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("GET /{$}", templ.Handler(web.Home()))
+	mux.Handle("GET /static/", web.Assets())
 	mux.HandleFunc("GET /healthz", health)
 	mux.HandleFunc("GET /readyz", health)
 	return mux
