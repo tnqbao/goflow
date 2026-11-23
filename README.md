@@ -16,7 +16,7 @@ The server listens on `:8080` and serves the page at `/`. HTMX 2.0.8 and the bas
 
 At startup, GoFlow creates `/data` and `/data/browser` if needed, opens `/data/goflow.db`, and applies database migrations before listening. The process needs permission to create and write to the data directory. For local development without access to `/data`, run `GOFLOW_DATA_DIR=./data go run ./cmd/goflow`; the database and browser directory will be created there. Existing data is preserved across restarts.
 
-`GET /healthz` returns HTTP 200 while the server is running. `GET /readyz` checks the database connection and returns HTTP 503 if it is unavailable. The browser directory is reserved for a future browser integration.
+`GET /healthz` returns HTTP 200 while the server is running. `GET /readyz` checks the database connection and returns HTTP 503 if it is unavailable. The browser directory stores the persistent Chromium profile when the browser is started.
 
 ## Docker Compose
 
@@ -50,7 +50,7 @@ The internal provider contract defines connection operations and session states.
 
 ## Chromium lifecycle
 
-The internal browser package can start and stop a sandboxed Chromium process with a temporary profile. Its lifecycle tests use a locally installed `google-chrome` or `chromium`, and skip real-browser checks when neither is available. The application does not launch it yet. Persistent profiles and Google Flow sign-in are later tasks.
+The internal browser package starts a sandboxed Chromium process with a persistent profile directory. Callers supply the configured `BrowserData` path (`/data/browser` by default); the application does not launch Chromium yet. The profile may contain sensitive session data, so keep it private and preserve it on persistent storage. Its lifecycle tests use a locally installed `google-chrome` or `chromium`, and skip real-browser checks when neither is available. Google Flow sign-in remains a later feasibility task.
 
 ## SQLite foundation
 
