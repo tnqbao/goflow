@@ -48,6 +48,10 @@ To validate the chart locally, run `helm lint charts/goflow` and `python3 charts
 
 The internal provider contract defines connection operations and session states. A connected state requires a verified provider session. The provider selection page is available at `/settings/providers`. Google Flow connection is not implemented yet; its button reports that limitation. Seedance and Grok are disabled. Google Flow sign-in remains subject to the feasibility gate.
 
+## Chromium lifecycle
+
+The internal browser package can start and stop a sandboxed Chromium process with a temporary profile. Its lifecycle tests use a locally installed `google-chrome` or `chromium`, and skip real-browser checks when neither is available. The application does not launch it yet. Persistent profiles and Google Flow sign-in are later tasks.
+
 ## SQLite foundation
 
 The internal database package opens a SQLite file, enables foreign keys for each connection, and applies versioned migrations transactionally. No application tables have been added yet.
