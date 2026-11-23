@@ -46,7 +46,7 @@ To validate the chart locally, run `helm lint charts/goflow` and `python3 charts
 
 ## Provider connection foundation
 
-The internal provider contract defines connection operations and session states. A connected state requires a verified provider session. No provider connection or browser automation is implemented yet; Google Flow sign-in remains subject to the feasibility gate.
+The internal provider contract defines connection operations and session states. A connected state requires a verified provider session. The provider selection page is available at `/settings/providers`. Google Flow connection is not implemented yet; its button reports that limitation. Seedance and Grok are disabled. Google Flow sign-in remains subject to the feasibility gate.
 
 ## SQLite foundation
 

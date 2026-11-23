@@ -57,6 +57,8 @@ func initialize(ctx context.Context, cfg config.Config) (*sql.DB, error) {
 func routes(db *sql.DB) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /{$}", templ.Handler(web.Home()))
+	mux.Handle("GET /settings/providers", templ.Handler(web.Providers(false)))
+	mux.Handle("POST /settings/providers/google-flow/connect", templ.Handler(web.Providers(true), templ.WithStatus(http.StatusNotImplemented)))
 	mux.Handle("GET /static/", web.Assets())
 	mux.HandleFunc("GET /healthz", health)
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {

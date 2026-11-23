@@ -1,0 +1,42 @@
+package web
+
+templ Providers(connectionUnavailable bool) {
+	@Layout("Providers") {
+		<header class="page-header">
+			<div>
+				<p class="eyebrow">Settings</p>
+				<h1>Providers</h1>
+				<p class="page-description">Choose where to bring your scenes to life.</p>
+			</div>
+		</header>
+		if connectionUnavailable {
+			<p class="provider-notice" role="alert">Google Flow connection is not available yet. Sign-in must be validated before it can be enabled.</p>
+		}
+		<div class="provider-list">
+			<section class="provider-card" aria-labelledby="google-flow-title">
+				<div>
+					<h2 id="google-flow-title">Google Flow</h2>
+					<p>Use your Google Flow account to generate scenes.</p>
+					<p class="provider-hint">Connection is not available yet.</p>
+				</div>
+				<form method="post" action="/settings/providers/google-flow/connect">
+					<button class="provider-button" type="submit">Connect with Google</button>
+				</form>
+			</section>
+			<section class="provider-card provider-card-disabled" aria-labelledby="seedance-title">
+				<div>
+					<h2 id="seedance-title">Seedance</h2>
+					<p>Coming soon</p>
+				</div>
+				<button class="provider-button" type="button" disabled>Coming soon</button>
+			</section>
+			<section class="provider-card provider-card-disabled" aria-labelledby="grok-title">
+				<div>
+					<h2 id="grok-title">Grok</h2>
+					<p>Coming soon</p>
+				</div>
+				<button class="provider-button" type="button" disabled>Coming soon</button>
+			</section>
+		</div>
+	}
+}

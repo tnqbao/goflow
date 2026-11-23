@@ -42,8 +42,7 @@ a { color: inherit; }
 	letter-spacing: .1em;
 	text-transform: uppercase;
 }
-.sidebar-item { padding: .7rem .85rem; border-radius: .6rem; background: #e2e8df; font-weight: 650; }
-.sidebar-note { padding: 0 .85rem; color: #68736c; font-size: .8rem; }
+.sidebar-item { display: block; padding: .7rem .85rem; border-radius: .6rem; font-weight: 650; text-decoration: none; }
 .main-content { width: 100%; max-width: 76rem; margin: 0 auto; padding: 4rem clamp(1.5rem, 5vw, 5rem); }
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
 .eyebrow { margin: 0 0 .5rem; }
@@ -59,7 +58,22 @@ h1 { margin: 0; font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -.05em; line-
 	.app-shell { display: block; }
 	.sidebar { width: auto; padding: 1.25rem 1.5rem; border-right: 0; border-bottom: 1px solid #e2e5dd; }
 	.sidebar-label { margin-top: 1.5rem; }
-	.sidebar-note { margin-bottom: 0; }
 	.main-content { padding-top: 2.5rem; }
 	.page-header { flex-wrap: wrap; }
+}
+
+.sidebar-item[aria-current="page"] { background: #e2e8df; }
+.sidebar nav .sidebar-label { margin-top: 2rem; }
+.provider-list { display: grid; gap: 1rem; margin-top: 3rem; }
+.provider-card { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; padding: 1.5rem; border: 1px solid #e1e5dc; border-radius: 1rem; background: #fff; }
+.provider-card h2 { margin: 0; font-size: 1.15rem; }
+.provider-card p { margin: .4rem 0 0; color: #626e66; }
+.provider-card .provider-hint { font-size: .85rem; }
+.provider-card-disabled { background: #f4f5f1; color: #69746c; }
+.provider-button { padding: .7rem 1rem; border: 0; border-radius: .6rem; background: #315f4a; color: #fff; font: inherit; font-weight: 650; cursor: pointer; }
+.provider-button:disabled { background: #e3e7e0; color: #59665d; cursor: not-allowed; }
+.provider-notice { margin: 2rem 0 -1rem; padding: 1rem; border: 1px solid #d7cba8; border-radius: .6rem; background: #fff8e5; color: #5b4a1e; }
+
+@media (max-width: 640px) {
+	.provider-card { align-items: flex-start; flex-direction: column; }
 }
