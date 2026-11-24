@@ -11,20 +11,31 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/tnqbao/kubereel/internal/provider"
 	"github.com/tnqbao/kubereel/internal/workflow"
 )
 
 var idPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 type Workflows struct {
-	Store   *workflow.Store
-	DataDir string
+	Store     *workflow.Store
+	DataDir   string
+	Providers *provider.Manager
 }
 
 func (a Workflows) Register(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/providers", a.providers)
 	mux.HandleFunc("POST /api/workflows", a.create)
 	mux.HandleFunc("GET /api/workflows/{id}", a.get)
 	mux.HandleFunc("GET /api/workflows/{id}/artifact", a.artifact)
+}
+
+func (a Workflows) providers(w http.ResponseWriter, _ *http.Request) {
+	if a.Providers == nil {
+		http.Error(w, "provider manager unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, http.StatusOK, a.Providers.List())
 }
 
 func (a Workflows) create(w http.ResponseWriter, r *http.Request) {
@@ -32,7 +43,8 @@ func (a Workflows) create(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	var request struct {
-		Prompt string `json:"prompt"`
+		Prompt   string `json:"prompt"`
+		Provider string `json:"provider"`
 	}
 	if err := decoder.Decode(&request); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -40,6 +52,13 @@ func (a Workflows) create(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if request.Provider == "" {
+		request.Provider = "mock"
+	}
+	if a.Providers == nil || !a.Providers.Available(request.Provider) {
+		http.Error(w, "provider unavailable", http.StatusBadRequest)
 		return
 	}
 	item, err := a.Store.Create(r.Context(), request.Prompt)

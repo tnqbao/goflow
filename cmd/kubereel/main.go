@@ -19,6 +19,7 @@ import (
 	"github.com/tnqbao/kubereel/internal/config"
 	"github.com/tnqbao/kubereel/internal/database"
 	"github.com/tnqbao/kubereel/internal/mock"
+	"github.com/tnqbao/kubereel/internal/provider"
 	"github.com/tnqbao/kubereel/internal/web"
 	"github.com/tnqbao/kubereel/internal/workflow"
 )
@@ -70,7 +71,7 @@ func run(ctx context.Context, cfg config.Config) (runErr error) {
 	}
 	mux := routes(db)
 	if controller != nil {
-		api.Workflows{Store: store, DataDir: filepath.Dir(cfg.Database)}.Register(mux)
+		api.Workflows{Store: store, DataDir: filepath.Dir(cfg.Database), Providers: provider.NewManager()}.Register(mux)
 		controllerCtx, cancel := context.WithCancel(ctx)
 		done := make(chan struct{})
 		go func() {

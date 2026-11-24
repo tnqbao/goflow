@@ -33,6 +33,8 @@ curl http://localhost:8080/api/workflows/WORKFLOW_ID
 curl -o mock-scene.svg http://localhost:8080/api/workflows/WORKFLOW_ID/artifact
 ```
 
+`GET /api/providers` lists execution availability. Workflow requests default to `mock` and may explicitly specify `"provider":"mock"`. Google Flow remains unavailable until an authorized direct HTTP integration is verified.
+
 By default, the PVC uses `ReadWriteOnce` and Jobs are placed on the same node as the control plane. For multi-node execution, provide `ReadWriteMany` storage and set `persistence.accessMode=ReadWriteMany`. To use an existing claim, set `persistence.existingClaim` and set `persistence.accessMode` to match the claim. The previous `charts/goflow` release used different resource names: back up and preserve its PVC before migrating; do not uninstall it until data has been migrated or safely retained.
 
 Standalone `serve` currently starts the web UI without workflow execution. The desired deployment architecture and current task are documented in [SPEC.md](SPEC.md).

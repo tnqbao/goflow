@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/tnqbao/kubereel/internal/database"
+	"github.com/tnqbao/kubereel/internal/provider"
 	"github.com/tnqbao/kubereel/internal/workflow"
 )
 
@@ -23,7 +24,12 @@ func TestWorkflowEndpoints(t *testing.T) {
 	defer db.Close()
 	store := workflow.NewStore(db)
 	mux := http.NewServeMux()
-	(Workflows{Store: store, DataDir: dir}).Register(mux)
+	(Workflows{Store: store, DataDir: dir, Providers: provider.NewManager()}).Register(mux)
+	providers := httptest.NewRecorder()
+	mux.ServeHTTP(providers, httptest.NewRequest(http.MethodGet, "/api/providers", nil))
+	if providers.Code != http.StatusOK || !strings.Contains(providers.Body.String(), `"id":"mock","available":true`) || !strings.Contains(providers.Body.String(), `"id":"google-flow","available":false`) {
+		t.Fatalf("provider list: %d %s", providers.Code, providers.Body.String())
+	}
 	request := httptest.NewRecorder()
 	mux.ServeHTTP(request, httptest.NewRequest(http.MethodPost, "/api/workflows", strings.NewReader(`{"prompt":"hello"}`)))
 	if request.Code != http.StatusAccepted {
@@ -64,7 +70,7 @@ func TestWorkflowEndpoints(t *testing.T) {
 	if artifact.Code != http.StatusOK || artifact.Body.String() != "<svg/>" {
 		t.Fatalf("artifact: %d %s", artifact.Code, artifact.Body.String())
 	}
-	for _, body := range []string{`{"prompt":""}`, `{"prompt":"hi","extra":1}`, `{"prompt":"hi"}{}`} {
+	for _, body := range []string{`{"prompt":""}`, `{"prompt":"hi","extra":1}`, `{"prompt":"hi"}{}`, `{"prompt":"hi","provider":"google-flow"}`} {
 		response := httptest.NewRecorder()
 		mux.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/workflows", strings.NewReader(body)))
 		if response.Code != http.StatusBadRequest {
