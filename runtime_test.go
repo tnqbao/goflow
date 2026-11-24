@@ -40,3 +40,19 @@ func TestStorageAccessModes(t *testing.T) {
 		}
 	}
 }
+
+func TestParseJobTTL(t *testing.T) {
+	for _, value := range []string{"-1", "not-a-number", "2147483648"} {
+		if _, err := parseJobTTL(value); err == nil {
+			t.Fatalf("accepted retention %q", value)
+		}
+	}
+	ttl, err := parseJobTTL("0")
+	if err != nil || ttl == nil || *ttl != 0 {
+		t.Fatalf("zero retention = %v, %v", ttl, err)
+	}
+	ttl, err = parseJobTTL("")
+	if err != nil || ttl != nil {
+		t.Fatalf("default retention = %v, %v", ttl, err)
+	}
+}

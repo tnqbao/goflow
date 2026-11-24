@@ -15,11 +15,12 @@ import (
 var workflowID = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 type JobConfig struct {
-	Image         string
-	Claim         string
-	Instance      string
-	SharedStorage bool
-	PullPolicy    corev1.PullPolicy
+	Image                   string
+	Claim                   string
+	Instance                string
+	SharedStorage           bool
+	PullPolicy              corev1.PullPolicy
+	TTLSecondsAfterFinished *int32
 }
 
 // Job builds a single worker or render Job using the control-plane image.
@@ -47,6 +48,12 @@ func Job(id, stage string, cfg JobConfig) (*batchv1.Job, error) {
 	}
 	var retries int32
 	ttl := int32(86400)
+	if cfg.TTLSecondsAfterFinished != nil {
+		ttl = *cfg.TTLSecondsAfterFinished
+	}
+	if ttl < 0 {
+		return nil, fmt.Errorf("job retention must not be negative")
+	}
 	user := int64(10001)
 	no := false
 	job := &batchv1.Job{
@@ -54,10 +61,11 @@ func Job(id, stage string, cfg JobConfig) (*batchv1.Job, error) {
 		Spec: batchv1.JobSpec{BackoffLimit: &retries, TTLSecondsAfterFinished: &ttl, Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app.kubernetes.io/name": "kubereel", "kubereel.io/workflow": id, "kubereel.io/instance": cfg.Instance}},
 			Spec: corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, AutomountServiceAccountToken: &no,
-				SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: boolPtr(true), RunAsUser: &user, RunAsGroup: &user, FSGroup: &user},
+				SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: boolPtr(true), RunAsUser: &user, RunAsGroup: &user, FSGroup: &user, SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
 				Containers: []corev1.Container{{Name: stage, Image: cfg.Image, ImagePullPolicy: cfg.PullPolicy, Args: []string{stage, "--input", input, "--output", output},
-					Resources:    corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("128Mi")}, Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")}},
-					VolumeMounts: []corev1.VolumeMount{{Name: "data", MountPath: "/data"}}}},
+					SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: &no, Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}},
+					Resources:       corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("128Mi")}, Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")}},
+					VolumeMounts:    []corev1.VolumeMount{{Name: "data", MountPath: "/data"}}}},
 				Volumes: []corev1.Volume{{Name: "data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: cfg.Claim}}}},
 			},
 		}},

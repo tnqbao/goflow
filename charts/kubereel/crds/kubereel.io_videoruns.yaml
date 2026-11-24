@@ -34,6 +34,9 @@ spec:
             required:
             - workflowRef
             - workflowSnapshot
+            x-kubernetes-validations:
+            - rule: 'has(self.inputs) == has(oldSelf.inputs) && (!has(self.inputs) || self.inputs == oldSelf.inputs)'
+              message: run inputs are immutable
             properties:
               workflowRef:
                 type: string

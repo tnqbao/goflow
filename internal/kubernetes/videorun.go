@@ -9,6 +9,7 @@ import (
 	"reflect"
 
 	"github.com/tnqbao/kubereel/internal/workflow"
+	batchv1 "k8s.io/api/batch/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -27,7 +28,8 @@ func VideoRunResource() schema.GroupVersionResource {
 
 // VideoRunController validates workflow snapshots and records ready steps.
 type VideoRunController struct {
-	Runs dynamic.ResourceInterface
+	Runs     dynamic.ResourceInterface
+	Executor *StepExecutor
 }
 
 // Run watches VideoRuns until the context is cancelled.
@@ -54,8 +56,22 @@ func (c *VideoRunController) Run(ctx context.Context) {
 		slog.Error("register VideoRun event handler", "error", err)
 		return
 	}
+	var jobInformer cache.SharedIndexInformer
+	if c.Executor != nil {
+		jobInformer, err = c.jobInformer(ctx, informer, queue)
+	}
+	if err != nil {
+		slog.Error("register VideoRun job event handler", "error", err)
+		return
+	}
+	if jobInformer != nil {
+		go jobInformer.Run(ctx.Done())
+	}
 	go informer.Run(ctx.Done())
 	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
+		return
+	}
+	if jobInformer != nil && !cache.WaitForCacheSync(ctx.Done(), jobInformer.HasSynced) {
 		return
 	}
 	go func() {
@@ -64,6 +80,29 @@ func (c *VideoRunController) Run(ctx context.Context) {
 	}()
 	for c.process(ctx, queue) {
 	}
+}
+
+func (c *VideoRunController) jobInformer(ctx context.Context, runs cache.SharedIndexInformer, queue workqueue.TypedRateLimitingInterface[string]) (cache.SharedIndexInformer, error) {
+	selector := "kubereel.io/instance=" + c.Executor.Config.Instance
+	informer := cache.NewSharedIndexInformer(&cache.ListWatch{
+		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
+			options.LabelSelector = selector
+			return c.Executor.Jobs.List(ctx, options)
+		},
+		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
+			options.LabelSelector = selector
+			return c.Executor.Jobs.Watch(ctx, options)
+		},
+	}, &batchv1.Job{}, 0, nil)
+	enqueue := func(_ interface{}) {
+		for _, key := range runs.GetStore().ListKeys() {
+			queue.Add(key)
+		}
+	}
+	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: enqueue, UpdateFunc: func(_, current interface{}) { enqueue(current) }, DeleteFunc: enqueue,
+	})
+	return informer, err
 }
 
 func (c *VideoRunController) process(ctx context.Context, queue workqueue.TypedRateLimitingInterface[string]) bool {
@@ -119,14 +158,21 @@ func (c *VideoRunController) Reconcile(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	if reflect.DeepEqual(current, status) {
+	if !reflect.DeepEqual(current, status) {
+		return updateVideoRunStatus(ctx, c.Runs, run, status)
+	}
+	if c.Executor == nil {
 		return nil
 	}
+	return c.Executor.Reconcile(ctx, run, status)
+}
+
+func updateVideoRunStatus(ctx context.Context, runs dynamic.ResourceInterface, run *unstructured.Unstructured, status map[string]interface{}) error {
 	updated := run.DeepCopy()
 	if err := unstructured.SetNestedMap(updated.Object, status, "status"); err != nil {
 		return err
 	}
-	if _, err := c.Runs.UpdateStatus(ctx, updated, metav1.UpdateOptions{}); err != nil {
+	if _, err := runs.UpdateStatus(ctx, updated, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("update VideoRun status: %w", err)
 	}
 	return nil

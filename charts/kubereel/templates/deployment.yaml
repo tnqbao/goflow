@@ -53,6 +53,8 @@ spec:
               value: {{ eq .Values.storage.accessMode "ReadWriteMany" | quote }}
             - name: KUBEREEL_MAX_CONCURRENT
               value: {{ .Values.execution.maxConcurrentJobs | quote }}
+            - name: KUBEREEL_JOB_TTL_SECONDS
+              value: {{ .Values.execution.jobTTLSeconds | quote }}
           ports:
             - name: http
               containerPort: 8080

@@ -28,6 +28,7 @@ resources:
 execution:
   mode: kubernetes
   maxConcurrentJobs: 5
+  jobTTLSeconds: 86400
 
 providers:
   mock:

@@ -16,7 +16,8 @@
       "type": "object",
       "properties": {
         "mode": {"const": "kubernetes"},
-        "maxConcurrentJobs": {"type": "integer", "minimum": 1}
+        "maxConcurrentJobs": {"type": "integer", "minimum": 1},
+        "jobTTLSeconds": {"type": "integer", "minimum": 0, "maximum": 2147483647}
       }
     },
     "providers": {

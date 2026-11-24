@@ -14,12 +14,32 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
 )
 
 type testJobs struct {
 	jobs   map[string]*batchv1.Job
 	denied bool
+}
+
+func (j *testJobs) List(_ context.Context, options metav1.ListOptions) (*batchv1.JobList, error) {
+	selector, err := labels.Parse(options.LabelSelector)
+	if err != nil {
+		return nil, err
+	}
+	result := &batchv1.JobList{}
+	for _, job := range j.jobs {
+		if selector.Matches(labels.Set(job.Labels)) {
+			result.Items = append(result.Items, *job.DeepCopy())
+		}
+	}
+	return result, nil
+}
+
+func (j *testJobs) Watch(_ context.Context, _ metav1.ListOptions) (watch.Interface, error) {
+	return watch.NewFake(), nil
 }
 
 func (j *testJobs) Create(_ context.Context, job *batchv1.Job, _ metav1.CreateOptions) (*batchv1.Job, error) {

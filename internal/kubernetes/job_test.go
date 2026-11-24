@@ -29,6 +29,9 @@ func TestJobRespectsStorageAndStages(t *testing.T) {
 		if *pod.AutomountServiceAccountToken {
 			t.Fatal("worker received API token")
 		}
+		if *pod.Containers[0].SecurityContext.AllowPrivilegeEscalation || pod.Containers[0].SecurityContext.Capabilities.Drop[0] != "ALL" {
+			t.Fatal("worker privileges are not restricted")
+		}
 		if *job.Spec.BackoffLimit != 0 {
 			t.Fatal("unexpected job retry")
 		}
@@ -40,6 +43,12 @@ func TestJobRespectsStorageAndStages(t *testing.T) {
 	}
 	if job.Spec.Template.Spec.Affinity != nil {
 		t.Fatal("shared storage unexpectedly pins to a node")
+	}
+	ttl := int32(30)
+	cfg.TTLSecondsAfterFinished = &ttl
+	job, err = Job(id, "worker", cfg)
+	if err != nil || *job.Spec.TTLSecondsAfterFinished != ttl {
+		t.Fatalf("Job retention: %v, %v", job, err)
 	}
 }
 
@@ -56,5 +65,13 @@ func TestJobRejectsInvalidInputs(t *testing.T) {
 		if _, err := Job(tt.id, tt.stage, tt.cfg); err == nil {
 			t.Fatalf("accepted %+v", tt)
 		}
+	}
+}
+
+func TestJobRejectsNegativeRetention(t *testing.T) {
+	ttl := int32(-1)
+	_, err := Job(strings.Repeat("a", 32), "worker", JobConfig{Image: "i", Claim: "c", Instance: "r", TTLSecondsAfterFinished: &ttl})
+	if err == nil {
+		t.Fatal("accepted negative retention")
 	}
 }

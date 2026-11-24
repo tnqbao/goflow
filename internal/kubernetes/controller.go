@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/tnqbao/kubereel/internal/mock"
@@ -15,12 +16,15 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/watch"
 )
 
 type Jobs interface {
 	Create(context.Context, *batchv1.Job, metav1.CreateOptions) (*batchv1.Job, error)
 	Get(context.Context, string, metav1.GetOptions) (*batchv1.Job, error)
 	Delete(context.Context, string, metav1.DeleteOptions) error
+	List(context.Context, metav1.ListOptions) (*batchv1.JobList, error)
+	Watch(context.Context, metav1.ListOptions) (watch.Interface, error)
 }
 
 type Controller struct {
@@ -30,6 +34,7 @@ type Controller struct {
 	DataDir       string
 	MaxConcurrent int
 	VideoRuns     *VideoRunController
+	JobLock       *sync.Mutex
 }
 
 // Run reconciles durable workflow state until the control plane stops.
@@ -60,11 +65,19 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 	if c.Store == nil || c.Jobs == nil || c.DataDir == "" || c.MaxConcurrent < 1 {
 		return fmt.Errorf("invalid workflow controller configuration")
 	}
+	if c.JobLock != nil {
+		c.JobLock.Lock()
+		defer c.JobLock.Unlock()
+	}
+	videoJobs, err := activeVideoJobs(ctx, c.Jobs, c.Config.Instance)
+	if err != nil {
+		return err
+	}
 	active, err := c.Store.Active(ctx)
 	if err != nil {
 		return err
 	}
-	running := 0
+	running := videoJobs
 	for _, w := range active {
 		if w.Status == "running" {
 			running++
@@ -88,7 +101,7 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 
 func (c *Controller) reconcileOne(ctx context.Context, w workflow.Workflow) error {
 	if w.Status == "queued" {
-		if err := c.writeRequest(w); err != nil {
+		if err := writeRequest(c.DataDir, w); err != nil {
 			return err
 		}
 		if _, err := c.ensureJob(ctx, w.ID, "worker"); err != nil {
@@ -227,11 +240,11 @@ func validateJob(actual, expected *batchv1.Job) error {
 	return nil
 }
 
-func (c *Controller) writeRequest(w workflow.Workflow) error {
+func writeRequest(dataDir string, w workflow.Workflow) error {
 	if !workflowID.MatchString(w.ID) {
 		return fmt.Errorf("invalid workflow ID")
 	}
-	dir := filepath.Join(c.DataDir, "workflows", w.ID)
+	dir := filepath.Join(dataDir, "workflows", w.ID)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("create workflow directory: %w", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tnqbao/kubereel/internal/kubernetes"
@@ -28,6 +29,11 @@ func controllerFromEnv(ctx context.Context, store *workflow.Store, dataDir strin
 	}
 	namespace := os.Getenv("KUBEREEL_NAMESPACE")
 	config := kubernetes.JobConfig{Image: os.Getenv("KUBEREEL_JOB_IMAGE"), Claim: os.Getenv("KUBEREEL_PVC"), Instance: os.Getenv("KUBEREEL_INSTANCE"), PullPolicy: corev1.PullPolicy(os.Getenv("KUBEREEL_IMAGE_PULL_POLICY"))}
+	ttl, err := parseJobTTL(os.Getenv("KUBEREEL_JOB_TTL_SECONDS"))
+	if err != nil {
+		return nil, err
+	}
+	config.TTLSecondsAfterFinished = ttl
 	if namespace == "" {
 		return nil, fmt.Errorf("KUBEREEL_NAMESPACE is required")
 	}
@@ -83,7 +89,21 @@ func controllerFromEnv(ctx context.Context, store *workflow.Store, dataDir strin
 	if !supportsStorage(claim.Spec.AccessModes, config.SharedStorage) {
 		return nil, fmt.Errorf("PVC access modes do not support configured workflow placement")
 	}
-	return &kubernetes.Controller{Store: store, Jobs: jobs, Config: config, DataDir: dataDir, MaxConcurrent: maximum, VideoRuns: &kubernetes.VideoRunController{Runs: runs}}, nil
+	lock := &sync.Mutex{}
+	executor := &kubernetes.StepExecutor{Runs: runs, Jobs: jobs, Store: store, Config: config, DataDir: dataDir, MaxConcurrent: maximum, JobLock: lock}
+	return &kubernetes.Controller{Store: store, Jobs: jobs, Config: config, DataDir: dataDir, MaxConcurrent: maximum, JobLock: lock, VideoRuns: &kubernetes.VideoRunController{Runs: runs, Executor: executor}}, nil
+}
+
+func parseJobTTL(value string) (*int32, error) {
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 32)
+	if err != nil || parsed < 0 {
+		return nil, fmt.Errorf("KUBEREEL_JOB_TTL_SECONDS must be a non-negative integer")
+	}
+	ttl := int32(parsed)
+	return &ttl, nil
 }
 
 func supportsStorage(modes []corev1.PersistentVolumeAccessMode, shared bool) bool {

@@ -48,6 +48,22 @@ func Render(ctx context.Context, input, output string) error {
 	if err != nil {
 		return err
 	}
+	if err := validateSVG(data); err != nil {
+		return err
+	}
+	return writeFile(ctx, output, data)
+}
+
+// ValidateSVG checks an existing Mock artifact without modifying it.
+func ValidateSVG(ctx context.Context, input string) error {
+	data, err := readFile(ctx, input)
+	if err != nil {
+		return err
+	}
+	return validateSVG(data)
+}
+
+func validateSVG(data []byte) error {
 	decoder := xml.NewDecoder(bytes.NewReader(data))
 	token, err := decoder.Token()
 	if err != nil {
@@ -66,7 +82,7 @@ func Render(ctx context.Context, input, output string) error {
 			return fmt.Errorf("validate SVG: %w", err)
 		}
 	}
-	return writeFile(ctx, output, data)
+	return nil
 }
 
 func readFile(ctx context.Context, path string) ([]byte, error) {

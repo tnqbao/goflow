@@ -40,6 +40,7 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(version["subresources"], {"status": {}})
         schema = version["schema"]["openAPIV3Schema"]["properties"]
         self.assertEqual(set(schema["spec"]["required"]), {"workflowRef", "workflowSnapshot"})
+        self.assertEqual(schema["spec"]["x-kubernetes-validations"][0]["message"], "run inputs are immutable")
         snapshot = dict(schema["spec"]["properties"]["workflowSnapshot"])
         self.assertEqual(snapshot.pop("x-kubernetes-validations")[0]["rule"], "self == oldSelf")
         workflow = docs["videoworkflows.kubereel.io"]["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
@@ -67,11 +68,12 @@ class ChartTest(unittest.TestCase):
         env = {item["name"]: item.get("value") for item in container["env"]}
         self.assertEqual(env["KUBEREEL_EXECUTION_MODE"], "kubernetes")
         self.assertEqual(env["KUBEREEL_MAX_CONCURRENT"], "5")
+        self.assertEqual(env["KUBEREEL_JOB_TTL_SECONDS"], "86400")
         self.assertEqual(container["image"], "kubereel:0.1.0")
         self.assertEqual(env["KUBEREEL_JOB_IMAGE"], container["image"])
         self.assertEqual(env["KUBEREEL_SHARED_STORAGE"], "false")
         self.assertEqual(env["KUBEREEL_PVC"], docs["PersistentVolumeClaim"]["metadata"]["name"])
-        self.assertEqual(docs["Role"]["rules"][0]["verbs"], ["get", "list", "create", "delete"])
+        self.assertEqual(docs["Role"]["rules"][0]["verbs"], ["get", "list", "watch", "create", "delete"])
         self.assertIn({"apiGroups": ["kubereel.io"], "resources": ["videoruns"], "verbs": ["get", "list", "watch"]}, docs["Role"]["rules"])
         self.assertIn({"apiGroups": ["kubereel.io"], "resources": ["videoruns/status"], "verbs": ["update"]}, docs["Role"]["rules"])
         self.assertEqual(container["livenessProbe"]["httpGet"]["path"], "/healthz")

@@ -139,6 +139,14 @@ if ! grep -q 'exactly one input value is required' "$workdir/invalid-input.log";
   cat "$workdir/invalid-input.log" >&2
   exit 1
 fi
+if kubectl --kubeconfig "$kubeconfig" -n kubereel-test patch videorun sample-run --type=merge -p '{"spec":{"inputs":{"topic":{"stringValue":"changed"}}}}' >"$workdir/immutable-input.log" 2>&1; then
+  printf 'VideoRun input update was accepted\n' >&2
+  exit 1
+fi
+if ! grep -q 'run inputs are immutable' "$workdir/immutable-input.log"; then
+  cat "$workdir/immutable-input.log" >&2
+  exit 1
+fi
 kubectl --kubeconfig "$kubeconfig" -n kubereel-test patch videorun sample-run --subresource=status --type=merge -p '{"status":{"phase":"Running","steps":[{"name":"script","phase":"Running","attempts":1,"providerRequestID":"request-1"}],"artifacts":["artifact-1"],"startedAt":"2026-01-01T00:00:00Z"}}'
 kubectl --kubeconfig "$kubeconfig" -n kubereel-test get videorun sample-run -o json >"$workdir/videorun.json"
 python3 - "$workdir/videorun.json" <<'PY'
@@ -243,6 +251,34 @@ if ! grep -q 'spec.apiKey' "$workdir/provider-secret.log"; then
   exit 1
 fi
 printf '%s\n' 'apiVersion: kubereel.io/v1alpha1' 'kind: VideoProvider' 'metadata: {name: mock, namespace: kubereel-test}' 'spec: {type: mock, capabilities: [text, image]}' | kubectl --kubeconfig "$kubeconfig" apply -f -
+cat >"$workdir/mock-image-run.yaml" <<'YAML'
+apiVersion: kubereel.io/v1alpha1
+kind: VideoRun
+metadata:
+  name: mock-image-run
+  namespace: kubereel-test
+spec:
+  workflowRef: sample
+  workflowSnapshot:
+    steps:
+      - name: image
+        type: image
+        providerRef: mock
+        timeoutSeconds: 60
+        resources:
+          requests: {cpu: 100m, memory: 128Mi}
+          limits: {cpu: "1", memory: 512Mi}
+  inputs:
+    prompt: {stringValue: "VideoRun mock image"}
+YAML
+kubectl --kubeconfig "$kubeconfig" apply -f "$workdir/mock-image-run.yaml"
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test wait --for=jsonpath='{.status.phase}'=Succeeded videorun/mock-image-run --timeout=120s
+artifact=$(kubectl --kubeconfig "$kubeconfig" -n kubereel-test get videorun mock-image-run -o jsonpath='{.status.artifacts[0]}')
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test exec deployment/kubereel-kubereel -- cat "/data/$artifact" >"$workdir/image.svg"
+if ! grep -q 'VideoRun mock image' "$workdir/image.svg"; then
+  printf 'VideoRun image artifact did not contain the prompt\n' >&2
+  exit 1
+fi
 kubectl --kubeconfig "$kubeconfig" -n kubereel-test port-forward --address 127.0.0.1 service/kubereel-kubereel :8080 >"$workdir/forward.log" 2>&1 &
 forward_pid=$!
 port=""
