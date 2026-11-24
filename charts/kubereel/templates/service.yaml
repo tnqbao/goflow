@@ -5,7 +5,7 @@ metadata:
   labels:
     {{- include "kubereel.labels" . | nindent 4 }}
 spec:
-  type: ClusterIP
+  type: {{ .Values.service.type }}
   selector:
     {{- include "kubereel.selectorLabels" . | nindent 4 }}
   ports:

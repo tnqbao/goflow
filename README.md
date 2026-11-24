@@ -44,7 +44,7 @@ docker run --rm -p 127.0.0.1:8080:8080 -v kubereel-data:/data kubereel:local ser
 
 ## Helm development installation
 
-The current chart uses one permanent control-plane container and creates temporary worker and render Jobs using the same image. An image must first be made available to the cluster nodes or a registry accessible to them:
+The current chart uses one permanent control-plane container and creates temporary worker and render Jobs using the same image. Its default `kubereel:0.1.0` is a local development tag, not a published release. Build the image and make it available to the cluster nodes, or provide an image from an accessible registry:
 
 ```sh
 helm install kubereel ./charts/kubereel \
@@ -63,7 +63,11 @@ curl -o mock-scene.svg http://localhost:8080/api/workflows/WORKFLOW_ID/artifact
 
 These endpoints are experimental and do not yet implement the versioned API described in the specification. `GET /api/providers` lists current execution availability; `mock` is the only available provider.
 
-The default PVC uses `ReadWriteOnce` and Jobs are placed on the control-plane node. For multi-node execution, provide `ReadWriteMany` storage and set `persistence.accessMode=ReadWriteMany`. To use an existing claim, set `persistence.existingClaim` and match its access mode.
+The default PVC uses `ReadWriteOnce` and Jobs are placed on the control-plane node. For multi-node execution, provide `ReadWriteMany` storage and set `storage.accessMode=ReadWriteMany`. To use an existing claim, set `storage.existingClaim` and match its access mode.
+
+The chart defaults to a 10 GiB PVC and five concurrent Jobs. It currently supports one replica, Kubernetes execution and PVC storage only. CRDs, authentication and a complete MP4 workflow remain future tasks; the optional ingress must not be publicly exposed while authentication is unavailable.
+
+When upgrading an older development installation, migrate `persistence.*` values to `storage.*` and `workflow.maxConcurrent` to `execution.maxConcurrentJobs`. The chart rejects the old keys to avoid silently changing the selected PVC. Back up the PVC before upgrading and preserve its existing claim name, access mode and size; increasing the size requires a StorageClass that supports expansion.
 
 ## Validation
 

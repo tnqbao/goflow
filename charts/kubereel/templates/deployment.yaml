@@ -5,7 +5,7 @@ metadata:
   labels:
     {{- include "kubereel.labels" . | nindent 4 }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.replicaCount }}
   strategy:
     type: Recreate
   selector:
@@ -27,10 +27,16 @@ spec:
         - name: kubereel
           image: {{ printf "%s:%s" .Values.image.repository (.Values.image.tag | toString) | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
           args: ["serve"]
           env:
             - name: KUBEREEL_EXECUTION_MODE
-              value: kubernetes
+              value: {{ .Values.execution.mode | quote }}
             - name: KUBEREEL_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -44,9 +50,9 @@ spec:
             - name: KUBEREEL_INSTANCE
               value: {{ .Release.Name | quote }}
             - name: KUBEREEL_SHARED_STORAGE
-              value: {{ eq .Values.persistence.accessMode "ReadWriteMany" | quote }}
+              value: {{ eq .Values.storage.accessMode "ReadWriteMany" | quote }}
             - name: KUBEREEL_MAX_CONCURRENT
-              value: {{ .Values.workflow.maxConcurrent | quote }}
+              value: {{ .Values.execution.maxConcurrentJobs | quote }}
           ports:
             - name: http
               containerPort: 8080

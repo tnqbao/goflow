@@ -3,7 +3,7 @@
 {{- end -}}
 
 {{- define "kubereel.claimName" -}}
-{{- default (include "kubereel.fullname" .) .Values.persistence.existingClaim -}}
+{{- default (include "kubereel.fullname" .) .Values.storage.existingClaim -}}
 {{- end -}}
 
 {{- define "kubereel.labels" -}}

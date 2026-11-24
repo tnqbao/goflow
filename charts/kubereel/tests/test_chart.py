@@ -31,23 +31,31 @@ class ChartTest(unittest.TestCase):
         container = pod["containers"][0]
         env = {item["name"]: item.get("value") for item in container["env"]}
         self.assertEqual(env["KUBEREEL_EXECUTION_MODE"], "kubernetes")
+        self.assertEqual(env["KUBEREEL_MAX_CONCURRENT"], "5")
+        self.assertEqual(container["image"], "kubereel:0.1.0")
+        self.assertEqual(env["KUBEREEL_JOB_IMAGE"], container["image"])
         self.assertEqual(env["KUBEREEL_SHARED_STORAGE"], "false")
         self.assertEqual(env["KUBEREEL_PVC"], docs["PersistentVolumeClaim"]["metadata"]["name"])
         self.assertEqual(docs["Role"]["rules"][0]["verbs"], ["get", "list", "create", "delete"])
         self.assertEqual(container["livenessProbe"]["httpGet"]["path"], "/healthz")
         self.assertEqual(container["readinessProbe"]["httpGet"]["path"], "/readyz")
         self.assertEqual(pod["securityContext"]["fsGroup"], 10001)
+        self.assertFalse(container["securityContext"]["allowPrivilegeEscalation"])
+        self.assertEqual(container["securityContext"]["capabilities"]["drop"], ["ALL"])
+        self.assertEqual(container["securityContext"]["seccompProfile"]["type"], "RuntimeDefault")
+        self.assertEqual(container["resources"]["limits"]["memory"], "1Gi")
         self.assertEqual(container["volumeMounts"][0]["mountPath"], "/data")
         self.assertEqual(pod["volumes"][0]["persistentVolumeClaim"]["claimName"], docs["PersistentVolumeClaim"]["metadata"]["name"])
         self.assertEqual(docs["Service"]["spec"]["selector"], deployment["selector"]["matchLabels"])
         self.assertNotIn("storageClassName", docs["PersistentVolumeClaim"]["spec"])
+        self.assertEqual(docs["PersistentVolumeClaim"]["spec"]["resources"]["requests"]["storage"], "10Gi")
 
     def test_overrides(self):
         docs = render(
             "--set", "image.repository=example/kubereel",
             "--set", "image.tag=v1",
-            "--set", "persistence.storageClass=fast",
-            "--set", "persistence.size=5Gi",
+            "--set", "storage.storageClass=fast",
+            "--set", "storage.size=5Gi",
             "--set", "service.port=9090",
             "--set", "resources.requests.memory=256Mi",
             "--set", "ingress.enabled=true",
@@ -67,7 +75,7 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(docs["Service"]["spec"]["ports"][0]["port"], 9090)
 
     def test_shared_existing_claim(self):
-        docs = render("--set", "persistence.existingClaim=shared-data", "--set", "persistence.accessMode=ReadWriteMany")
+        docs = render("--set", "storage.existingClaim=shared-data", "--set", "storage.accessMode=ReadWriteMany")
         self.assertNotIn("PersistentVolumeClaim", docs)
         pod = docs["Deployment"]["spec"]["template"]["spec"]
         self.assertEqual(pod["volumes"][0]["persistentVolumeClaim"]["claimName"], "shared-data")
@@ -75,8 +83,14 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(env["KUBEREEL_SHARED_STORAGE"], "true")
 
     def test_invalid_access_mode(self):
-        result = subprocess.run(["helm", "template", "test", str(CHART), "--set", "persistence.accessMode=ReadOnlyMany"], text=True, capture_output=True)
+        result = subprocess.run(["helm", "template", "test", str(CHART), "--set", "storage.accessMode=ReadOnlyMany"], text=True, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
+
+    def test_unsupported_settings_are_rejected(self):
+        for value in ("replicaCount=2", "execution.mode=embedded", "execution.maxConcurrentJobs=0", "storage.type=s3", "providers.mock.enabled=false", "service.type=LoadBalancer", "image.tag=latest", "persistence.existingClaim=old-claim", "workflow.maxConcurrent=4"):
+            with self.subTest(value=value):
+                result = subprocess.run(["helm", "template", "test", str(CHART), "--set", value], text=True, capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
 
     def test_ingress_requires_host(self):
         result = subprocess.run(

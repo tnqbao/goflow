@@ -1,22 +1,37 @@
+replicaCount: 1
+
 image:
   repository: kubereel
-  tag: latest
+  tag: "0.1.0"
   pullPolicy: IfNotPresent
 
 service:
+  type: ClusterIP
   port: 8080
 
-persistence:
-  size: 1Gi
+storage:
+  type: pvc
+  size: 10Gi
   # Empty uses the cluster's default StorageClass.
   storageClass: ""
   accessMode: ReadWriteOnce
   existingClaim: ""
 
-resources: {}
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
 
-workflow:
-  maxConcurrent: 4
+execution:
+  mode: kubernetes
+  maxConcurrentJobs: 5
+
+providers:
+  mock:
+    enabled: true
 
 ingress:
   enabled: false

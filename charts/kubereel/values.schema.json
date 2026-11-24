@@ -1,21 +1,39 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
+  "not": {"anyOf": [{"required": ["persistence"]}, {"required": ["workflow"]}]},
   "properties": {
-    "persistence": {
+    "replicaCount": {"const": 1},
+    "storage": {
       "type": "object",
       "properties": {
+        "type": {"const": "pvc"},
         "accessMode": {"enum": ["ReadWriteOnce", "ReadWriteMany"]},
         "existingClaim": {"type": "string"}
       }
     },
-    "workflow": {
+    "execution": {
       "type": "object",
-      "properties": {"maxConcurrent": {"type": "integer", "minimum": 1}}
+      "properties": {
+        "mode": {"const": "kubernetes"},
+        "maxConcurrentJobs": {"type": "integer", "minimum": 1}
+      }
+    },
+    "providers": {
+      "type": "object",
+      "properties": {"mock": {"type": "object", "properties": {"enabled": {"const": true}}}}
+    },
+    "service": {
+      "type": "object",
+      "properties": {"type": {"const": "ClusterIP"}}
     },
     "image": {
       "type": "object",
-      "properties": {"pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}}
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "tag": {"type": "string", "minLength": 1, "not": {"const": "latest"}},
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      }
     }
   }
 }
