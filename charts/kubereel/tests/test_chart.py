@@ -45,6 +45,16 @@ class ChartTest(unittest.TestCase):
         workflow = docs["videoworkflows.kubereel.io"]["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
         self.assertEqual(snapshot, workflow)
 
+    def test_video_provider_crd(self):
+        crd = render("--include-crds")["videoproviders.kubereel.io"]
+        self.assertEqual(crd["spec"]["scope"], "Namespaced")
+        version = crd["spec"]["versions"][0]
+        self.assertEqual(version["name"], "v1alpha1")
+        self.assertTrue(version["served"] and version["storage"])
+        spec = version["schema"]["openAPIV3Schema"]["properties"]["spec"]
+        self.assertEqual(set(spec["properties"]), {"type", "capabilities", "models", "baseURL", "secretRef", "maxConcurrent", "timeoutSeconds"})
+        self.assertEqual(set(spec["properties"]["secretRef"]["required"]), {"name", "key"})
+
     def test_defaults(self):
         docs = render()
         self.assertEqual(set(docs), {"Deployment", "Service", "PersistentVolumeClaim", "ServiceAccount", "Role", "RoleBinding"})

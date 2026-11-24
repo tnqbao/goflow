@@ -1,0 +1,79 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: videoproviders.kubereel.io
+spec:
+  group: kubereel.io
+  scope: Namespaced
+  names:
+    plural: videoproviders
+    singular: videoprovider
+    kind: VideoProvider
+    shortNames: [vp]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required: [type, capabilities]
+              x-kubernetes-validations:
+                - rule: "self.type == 'mock' || has(self.secretRef)"
+                  message: a Secret reference is required for this provider type
+              properties:
+                type:
+                  type: string
+                  enum: [mock, gemini, fal]
+                capabilities:
+                  type: array
+                  minItems: 1
+                  maxItems: 4
+                  x-kubernetes-list-type: set
+                  items:
+                    type: string
+                    enum: [text, image, video, audio]
+                models:
+                  type: array
+                  maxItems: 100
+                  x-kubernetes-list-type: set
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 253
+                baseURL:
+                  type: string
+                  maxLength: 2048
+                  pattern: '^https://[^/@?#]+(/[^?#]*)?$'
+                secretRef:
+                  type: object
+                  required: [name, key]
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                      maxLength: 253
+                      pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
+                    key:
+                      type: string
+                      minLength: 1
+                      maxLength: 253
+                      pattern: '^[-._a-zA-Z0-9]+$'
+                maxConcurrent:
+                  type: integer
+                  minimum: 1
+                  maximum: 100
+                timeoutSeconds:
+                  type: integer
+                  minimum: 1
+                  maximum: 86400

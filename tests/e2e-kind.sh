@@ -152,6 +152,53 @@ assert run["status"]["phase"] == "Running"
 assert run["status"]["steps"][0]["providerRequestID"] == "request-1"
 assert run["status"]["artifacts"] == ["artifact-1"]
 PY
+kubectl --kubeconfig "$kubeconfig" wait --for=condition=Established crd/videoproviders.kubereel.io --timeout=60s
+cat >"$workdir/videoprovider.yaml" <<'YAML'
+apiVersion: kubereel.io/v1alpha1
+kind: VideoProvider
+metadata:
+  name: sample-provider
+  namespace: kubereel-test
+spec:
+  type: gemini
+  capabilities: [text]
+  models: [example-model]
+  baseURL: https://example.com/api
+  secretRef: {name: provider-credentials, key: api-key}
+  maxConcurrent: 2
+  timeoutSeconds: 60
+YAML
+kubectl --kubeconfig "$kubeconfig" apply -f "$workdir/videoprovider.yaml"
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test get videoprovider sample-provider -o json >"$workdir/videoprovider.json"
+python3 - "$workdir/videoprovider.json" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as source:
+    spec = json.load(source)["spec"]
+assert spec["type"] == "gemini"
+assert spec["capabilities"] == ["text"]
+assert spec["models"] == ["example-model"]
+assert spec["baseURL"] == "https://example.com/api"
+assert spec["secretRef"] == {"name": "provider-credentials", "key": "api-key"}
+assert spec["maxConcurrent"] == 2
+assert spec["timeoutSeconds"] == 60
+PY
+if kubectl --kubeconfig "$kubeconfig" -n kubereel-test patch videoprovider sample-provider --type=json -p='[{"op":"remove","path":"/spec/secretRef"}]' >"$workdir/provider-invalid.log" 2>&1; then
+  printf 'provider without a Secret reference was accepted\n' >&2
+  exit 1
+fi
+if ! grep -q 'a Secret reference is required' "$workdir/provider-invalid.log"; then
+  cat "$workdir/provider-invalid.log" >&2
+  exit 1
+fi
+if printf '%s\n' 'apiVersion: kubereel.io/v1alpha1' 'kind: VideoProvider' 'metadata: {name: invalid, namespace: kubereel-test}' 'spec: {type: mock, capabilities: [text], apiKey: not-a-real-key}' | kubectl --kubeconfig "$kubeconfig" apply --dry-run=server --validate=strict -f - >"$workdir/provider-secret.log" 2>&1; then
+  printf 'provider accepted a credential field\n' >&2
+  exit 1
+fi
+if ! grep -q 'spec.apiKey' "$workdir/provider-secret.log"; then
+  cat "$workdir/provider-secret.log" >&2
+  exit 1
+fi
+printf '%s\n' 'apiVersion: kubereel.io/v1alpha1' 'kind: VideoProvider' 'metadata: {name: mock, namespace: kubereel-test}' 'spec: {type: mock, capabilities: [text, image]}' | kubectl --kubeconfig "$kubeconfig" apply -f -
 kubectl --kubeconfig "$kubeconfig" -n kubereel-test port-forward --address 127.0.0.1 service/kubereel-kubereel :8080 >"$workdir/forward.log" 2>&1 &
 forward_pid=$!
 port=""
