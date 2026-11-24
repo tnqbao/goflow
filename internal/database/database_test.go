@@ -86,15 +86,15 @@ func TestMigrations(t *testing.T) {
 	}
 	defer db.Close()
 
-	first := []migration{{1, `CREATE TABLE example (id INTEGER PRIMARY KEY)`}}
+	first := []migration{{100, `CREATE TABLE example (id INTEGER PRIMARY KEY)`}}
 	for i := 0; i < 2; i++ {
 		if err := migrate(ctx, db, first); err != nil {
 			t.Fatal(err)
 		}
 	}
-	bad := []migration{{2, `CREATE TABLE rolled_back (id INTEGER)`}, {3, `INVALID SQL`}}
-	if err := migrate(ctx, db, bad); err == nil || !strings.Contains(err.Error(), "migration 3") {
-		t.Fatalf("expected migration 3 error, got %v", err)
+	bad := []migration{{101, `CREATE TABLE rolled_back (id INTEGER)`}, {102, `INVALID SQL`}}
+	if err := migrate(ctx, db, bad); err == nil || !strings.Contains(err.Error(), "migration 102") {
+		t.Fatalf("expected migration 102 error, got %v", err)
 	}
 	var versions, tables int
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&versions); err != nil {
@@ -103,7 +103,7 @@ func TestMigrations(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE name = 'rolled_back'`).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
-	if versions != 1 || tables != 0 {
-		t.Errorf("versions = %d, rolled back tables = %d; want 1, 0", versions, tables)
+	if versions != 2 || tables != 0 {
+		t.Errorf("versions = %d, rolled back tables = %d; want 2, 0", versions, tables)
 	}
 }

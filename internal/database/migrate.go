@@ -11,6 +11,19 @@ type migration struct {
 	sql     string
 }
 
+var migrations = []migration{{
+	version: 1,
+	sql: `CREATE TABLE workflows (
+		id TEXT PRIMARY KEY,
+		prompt TEXT NOT NULL,
+		status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'succeeded', 'failed')),
+		result TEXT NOT NULL DEFAULT '',
+		error TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`,
+}}
+
 // migrate applies migrations in order, atomically recording each version with its SQL.
 func migrate(ctx context.Context, db *sql.DB, migrations []migration) error {
 	tx, err := db.BeginTx(ctx, nil)

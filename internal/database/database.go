@@ -18,12 +18,12 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("database path is empty")
 	}
 
-	dsn := "file:" + url.PathEscape(path) + "?_pragma=foreign_keys(1)"
+	dsn := "file:" + url.PathEscape(path) + "?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	if err := migrate(ctx, db, nil); err != nil {
+	if err := migrate(ctx, db, migrations); err != nil {
 		return nil, errors.Join(err, db.Close())
 	}
 	return db, nil
