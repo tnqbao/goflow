@@ -51,12 +51,21 @@ func (s *Store) Create(ctx context.Context, prompt string) (Workflow, error) {
 }
 
 func (s *Store) Get(ctx context.Context, id string) (Workflow, error) {
-	var w Workflow
-	var created, updated string
-	err := s.db.QueryRowContext(ctx, `SELECT id, prompt, status, result, error, created_at, updated_at FROM workflows WHERE id = ?`, id).Scan(&w.ID, &w.Prompt, &w.Status, &w.Result, &w.Error, &created, &updated)
+	w, err := scanWorkflow(s.db.QueryRowContext(ctx, `SELECT id, prompt, status, result, error, created_at, updated_at FROM workflows WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Workflow{}, ErrNotFound
 	}
+	return w, err
+}
+
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanWorkflow(row scanner) (Workflow, error) {
+	var w Workflow
+	var created, updated string
+	err := row.Scan(&w.ID, &w.Prompt, &w.Status, &w.Result, &w.Error, &created, &updated)
 	if err != nil {
 		return Workflow{}, fmt.Errorf("read workflow: %w", err)
 	}
@@ -69,6 +78,27 @@ func (s *Store) Get(ctx context.Context, id string) (Workflow, error) {
 		return Workflow{}, fmt.Errorf("parse update time: %w", err)
 	}
 	return w, nil
+}
+
+// Active returns workflows that still need scheduler reconciliation.
+func (s *Store) Active(ctx context.Context) ([]Workflow, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, prompt, status, result, error, created_at, updated_at FROM workflows WHERE status IN ('queued', 'running') ORDER BY created_at, id`)
+	if err != nil {
+		return nil, fmt.Errorf("list active workflows: %w", err)
+	}
+	defer rows.Close()
+	var workflows []Workflow
+	for rows.Next() {
+		w, err := scanWorkflow(rows)
+		if err != nil {
+			return nil, err
+		}
+		workflows = append(workflows, w)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workflows: %w", err)
+	}
+	return workflows, nil
 }
 
 // Transition changes the workflow only when it has the expected current status.
