@@ -37,4 +37,6 @@ curl -o mock-scene.svg http://localhost:8080/api/workflows/WORKFLOW_ID/artifact
 
 By default, the PVC uses `ReadWriteOnce` and Jobs are placed on the same node as the control plane. For multi-node execution, provide `ReadWriteMany` storage and set `persistence.accessMode=ReadWriteMany`. To use an existing claim, set `persistence.existingClaim` and set `persistence.accessMode` to match the claim. The previous `charts/goflow` release used different resource names: back up and preserve its PVC before migrating; do not uninstall it until data has been migrated or safely retained.
 
-Standalone `serve` currently starts the web UI without workflow execution. The desired deployment architecture and current task are documented in [SPEC.md](SPEC.md).
+Standalone `serve` currently starts the web UI without workflow execution. Deployment requirements and implementation status are documented in [SPEC.md](SPEC.md).
+
+To verify the Mock workflow on an isolated temporary Kubernetes cluster, install `kind`, Docker, Helm, kubectl and Python 3, then run `tests/e2e-kind.sh`. The script builds an image, creates a temporary kind cluster, runs the workflow and verifies Job cleanup, then removes its test resources.

@@ -26,15 +26,21 @@
   automation, a persistent Chrome runtime, CAPTCHA bypass and manual Google
   session copying are not the intended production architecture.
 
-## Current incremental task: K01 — KubeReel foundation
+## Implementation status
 
-Move the existing GoFlow application foundation to the KubeReel name: Go
-module, executable and `serve` entry point, embedded UI branding, container
-entry point, and graceful control-plane shutdown. Preserve existing data and
-configuration compatibility. Validate the Go packages and the container; do
-not implement the workflow engine, Kubernetes Jobs, worker, render, or provider
-functionality as part of K01. Complete and push this task before starting the
-next task.
+The single executable implements `serve`, `worker` and `render`. In Kubernetes
+mode, the control plane persists workflow state, exposes a REST API and provider
+registry, and reconciles Mock worker and render Jobs using the same image.
+The Mock provider produces an explicitly labeled SVG artifact, not generated
+video. The Helm chart defaults to one control-plane replica and an RWO PVC; RWO
+Jobs are scheduled on the same node, and RWX storage enables multi-node Jobs.
+Jobs have resource limits and are deleted after completion, with TTL cleanup as
+a fallback. The control plane validates the PVC's actual access modes.
+
+Embedded execution is a future mode. Google Flow and other real generation
+providers remain unavailable until their direct HTTP authentication and API
+contracts are verified; the Mock provider is not evidence of real generation.
+The current chart expects the configured image to be available to cluster nodes.
 
 **Version:** 0.1.0
 **Status:** Ready for incremental implementation
