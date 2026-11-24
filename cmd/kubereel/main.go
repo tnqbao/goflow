@@ -15,10 +15,12 @@ import (
 	"time"
 
 	"github.com/a-h/templ"
+	"github.com/tnqbao/kubereel/internal/api"
 	"github.com/tnqbao/kubereel/internal/config"
 	"github.com/tnqbao/kubereel/internal/database"
 	"github.com/tnqbao/kubereel/internal/mock"
 	"github.com/tnqbao/kubereel/internal/web"
+	"github.com/tnqbao/kubereel/internal/workflow"
 )
 
 func main() {
@@ -61,10 +63,29 @@ func run(ctx context.Context, cfg config.Config) (runErr error) {
 		return err
 	}
 	defer func() { runErr = errors.Join(runErr, db.Close()) }()
+	store := workflow.NewStore(db)
+	controller, err := controllerFromEnv(ctx, store, filepath.Dir(cfg.Database))
+	if err != nil {
+		return err
+	}
+	mux := routes(db)
+	if controller != nil {
+		api.Workflows{Store: store, DataDir: filepath.Dir(cfg.Database)}.Register(mux)
+		controllerCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			controller.Run(controllerCtx)
+		}()
+		defer func() {
+			cancel()
+			<-done
+		}()
+	}
 
 	server := &http.Server{
 		Addr:              cfg.Address,
-		Handler:           routes(db),
+		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	slog.Info("starting HTTP server", "address", cfg.Address)
@@ -105,7 +126,7 @@ func initialize(ctx context.Context, cfg config.Config) (*sql.DB, error) {
 	return db, nil
 }
 
-func routes(db *sql.DB) http.Handler {
+func routes(db *sql.DB) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("GET /{$}", templ.Handler(web.Home()))
 	mux.Handle("GET /settings/providers", templ.Handler(web.Providers(false)))
