@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -100,6 +101,40 @@ func TestWorkerAndRenderCommands(t *testing.T) {
 	}
 	if err := execute(context.Background(), []string{"worker"}, config.Config{}); err == nil {
 		t.Fatal("worker accepted missing paths")
+	}
+}
+
+func TestSingleExecutableCommands(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "kubereel")
+	build := exec.Command("go", "build", "-o", binary, ".")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build executable: %v\n%s", err, output)
+	}
+	request := filepath.Join(dir, "request.json")
+	scene := filepath.Join(dir, "scene.svg")
+	result := filepath.Join(dir, "result.svg")
+	if err := os.WriteFile(request, []byte(`{"prompt":"Single executable"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"worker", "--input", request, "--output", scene},
+		{"render", "--input", scene, "--output", result},
+	} {
+		command := exec.Command(binary, args...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("%s command: %v\n%s", args[0], err, output)
+		}
+	}
+	data, err := os.ReadFile(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Single executable") {
+		t.Fatal("rendered artifact does not contain the request")
+	}
+	if err := exec.Command(binary, "unknown").Run(); err == nil {
+		t.Fatal("executable accepted an unknown command")
 	}
 }
 

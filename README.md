@@ -15,6 +15,10 @@ The project is in initial development. Its target architecture is a modular mono
 
 The current management API and interface do not provide authentication. Keep them on a trusted network and use local port forwarding; do not expose them publicly.
 
+## Single executable
+
+The same `kubereel` executable provides `serve`, `worker` and `render` commands. `serve` starts the current control plane. `worker` creates a Mock SVG from a JSON request, and `render` validates and copies that SVG; the FFmpeg renderer and real provider execution are future work. Run either worker command with `--input` and `--output` paths.
+
 ## Run locally
 
 ```sh
