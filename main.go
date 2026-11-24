@@ -94,10 +94,10 @@ func run(ctx context.Context, cfg config.Config) (runErr error) {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	slog.Info("starting HTTP server", "address", cfg.Address)
-	return serve(ctx, server)
+	return serve(ctx, server, 10*time.Second)
 }
 
-func serve(ctx context.Context, server *http.Server) error {
+func serve(ctx context.Context, server *http.Server, shutdownTimeout time.Duration) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -107,16 +107,21 @@ func serve(ctx context.Context, server *http.Server) error {
 	case err := <-stopped:
 		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("shut down server: %w", err)
+		shutdownErr := server.Shutdown(shutdownCtx)
+		var closeErr error
+		if shutdownErr != nil {
+			closeErr = server.Close()
 		}
 		err := <-stopped
-		if !errors.Is(err, http.ErrServerClosed) {
-			return err
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
 		}
-		return nil
+		if shutdownErr != nil {
+			return errors.Join(fmt.Errorf("shut down server: %w", shutdownErr), closeErr, err)
+		}
+		return err
 	}
 }
 

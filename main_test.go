@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tnqbao/kubereel/internal/config"
 )
@@ -75,9 +77,51 @@ func TestServeStopsOnCancellation(t *testing.T) {
 		<-started
 		cancel()
 	}()
-	if err := serve(ctx, server); err != nil {
+	if err := serve(ctx, server, time.Second); err != nil {
 		t.Fatalf("serve after cancellation: %v", err)
 	}
+}
+
+func TestServeClosesConnectionsAfterShutdownTimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	address := make(chan string, 1)
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	server := &http.Server{
+		Addr: "127.0.0.1:0",
+		BaseContext: func(listener net.Listener) context.Context {
+			address <- listener.Addr().String()
+			return context.Background()
+		},
+		Handler: http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			close(started)
+			<-r.Context().Done()
+			close(finished)
+		}),
+	}
+	result := make(chan error, 1)
+	go func() { result <- serve(ctx, server, 50*time.Millisecond) }()
+	client := &http.Client{Timeout: 5 * time.Second}
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		response, err := client.Get("http://" + <-address)
+		if err == nil {
+			response.Body.Close()
+		}
+	}()
+	<-started
+	cancel()
+	if err := <-result; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("serve error = %v, want shutdown deadline exceeded", err)
+	}
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("active handler was not cancelled")
+	}
+	<-requestDone
 }
 
 func TestWorkerAndRenderCommands(t *testing.T) {
