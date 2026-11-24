@@ -11,7 +11,7 @@ The project is in initial development. Its target architecture is a modular mono
 - A Go service exposes health endpoints, an embedded interface and an experimental workflow API.
 - In Kubernetes mode, the control plane persists workflow state and creates worker and render Jobs using the same image.
 - The built-in Mock produces a labeled SVG placeholder without external services or credentials. It does **not** yet produce video or an MP4.
-- Workflow CRDs, the DAG engine, FFmpeg rendering, provider integrations, authentication and the target `/api/v1` API remain roadmap work.
+- The `VideoWorkflow` CRD defines workflow configuration; it is not yet connected to execution. The remaining CRDs, DAG engine, FFmpeg rendering, provider integrations, authentication and target `/api/v1` API remain roadmap work.
 
 The current management API and interface do not provide authentication. Keep them on a trusted network and use local port forwarding; do not expose them publicly.
 
@@ -65,7 +65,9 @@ These endpoints are experimental and do not yet implement the versioned API desc
 
 The default PVC uses `ReadWriteOnce` and Jobs are placed on the control-plane node. For multi-node execution, provide `ReadWriteMany` storage and set `storage.accessMode=ReadWriteMany`. To use an existing claim, set `storage.existingClaim` and match its access mode.
 
-The chart defaults to a 10 GiB PVC and five concurrent Jobs. It currently supports one replica, Kubernetes execution and PVC storage only. CRDs, authentication and a complete MP4 workflow remain future tasks; the optional ingress must not be publicly exposed while authentication is unavailable.
+The chart defaults to a 10 GiB PVC and five concurrent Jobs. It currently supports one replica, Kubernetes execution and PVC storage only. Authentication and a complete MP4 workflow remain future tasks; the optional ingress must not be publicly exposed while authentication is unavailable.
+
+Helm installs the `VideoWorkflow` CRD on initial installation, but does not upgrade or delete CRDs automatically. Back up custom resources and apply a reviewed CRD upgrade separately before upgrading the chart. Deleting the CRD deletes all `VideoWorkflow` resources in the cluster.
 
 When upgrading an older development installation, migrate `persistence.*` values to `storage.*` and `workflow.maxConcurrent` to `execution.maxConcurrentJobs`. The chart rejects the old keys to avoid silently changing the selected PVC. Back up the PVC before upgrading and preserve its existing claim name, access mode and size; increasing the size requires a StorageClass that supports expansion.
 

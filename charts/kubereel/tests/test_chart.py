@@ -20,6 +20,17 @@ def render(*values):
 
 
 class ChartTest(unittest.TestCase):
+    def test_video_workflow_crd_is_included(self):
+        docs = render("--include-crds")
+        crd = docs["CustomResourceDefinition"]
+        self.assertEqual(crd["metadata"]["name"], "videoworkflows.kubereel.io")
+        self.assertEqual(crd["spec"]["scope"], "Namespaced")
+        version = crd["spec"]["versions"][0]
+        self.assertEqual(version["name"], "v1alpha1")
+        self.assertTrue(version["served"] and version["storage"])
+        spec = version["schema"]["openAPIV3Schema"]["properties"]["spec"]
+        self.assertEqual(set(spec["properties"]), {"description", "inputs", "steps", "outputs"})
+
     def test_defaults(self):
         docs = render()
         self.assertEqual(set(docs), {"Deployment", "Service", "PersistentVolumeClaim", "ServiceAccount", "Role", "RoleBinding"})

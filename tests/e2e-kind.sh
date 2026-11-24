@@ -51,6 +51,55 @@ kind create cluster --name "$cluster" --kubeconfig "$kubeconfig" \
 kind load docker-image "$image" --name "$cluster"
 helm install kubereel ./charts/kubereel --kubeconfig "$kubeconfig" --namespace kubereel-test --create-namespace \
   --set image.repository=kubereel-e2e --set "image.tag=$suffix" --set image.pullPolicy=Never --wait --timeout 120s
+kubectl --kubeconfig "$kubeconfig" wait --for=condition=Established crd/videoworkflows.kubereel.io --timeout=60s
+cat >"$workdir/videoworkflow.yaml" <<'YAML'
+apiVersion: kubereel.io/v1alpha1
+kind: VideoWorkflow
+metadata:
+  name: sample
+  namespace: kubereel-test
+spec:
+  inputs:
+    - name: topic
+      type: string
+      required: true
+  steps:
+    - name: script
+      type: llm
+      providerRef: mock
+      retry: {maxAttempts: 2}
+      timeoutSeconds: 60
+      resources:
+        requests: {cpu: 100m, memory: 128Mi}
+    - name: result
+      type: output
+      dependsOn: [script]
+  outputs:
+    - name: video
+      from: result
+YAML
+kubectl --kubeconfig "$kubeconfig" apply -f "$workdir/videoworkflow.yaml"
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test get videoworkflow sample -o json >"$workdir/videoworkflow.json"
+python3 - "$workdir/videoworkflow.json" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as source:
+    spec = json.load(source)["spec"]
+assert spec["inputs"][0]["required"] is True
+assert spec["steps"][0]["providerRef"] == "mock"
+assert spec["steps"][0]["retry"]["maxAttempts"] == 2
+assert spec["steps"][0]["timeoutSeconds"] == 60
+assert spec["steps"][0]["resources"]["requests"]["cpu"] == "100m"
+assert spec["steps"][1]["dependsOn"] == ["script"]
+assert spec["outputs"][0]["from"] == "result"
+PY
+if printf '%s\n' 'apiVersion: kubereel.io/v1alpha1' 'kind: VideoWorkflow' 'metadata: {name: invalid, namespace: kubereel-test}' 'spec: {steps: []}' | kubectl --kubeconfig "$kubeconfig" apply --dry-run=server -f - >"$workdir/invalid.log" 2>&1; then
+  printf 'invalid VideoWorkflow was accepted\n' >&2
+  exit 1
+fi
+if ! grep -q 'spec.steps' "$workdir/invalid.log"; then
+  cat "$workdir/invalid.log" >&2
+  exit 1
+fi
 kubectl --kubeconfig "$kubeconfig" -n kubereel-test port-forward --address 127.0.0.1 service/kubereel-kubereel :8080 >"$workdir/forward.log" 2>&1 &
 forward_pid=$!
 port=""
