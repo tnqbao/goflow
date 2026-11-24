@@ -81,4 +81,4 @@ helm template kubereel ./charts/kubereel
 python3 charts/kubereel/tests/test_chart.py
 ```
 
-With `kind`, Docker, Helm, kubectl and Python 3 installed, `tests/e2e-kind.sh` builds an image, creates an isolated temporary cluster, runs the Mock workflow and verifies Job cleanup. It removes its test resources afterward.
+With Kind v0.27.0, Docker, Helm, kubectl and Python 3 installed, `tests/e2e-kind.sh` builds and smoke-tests an image, creates an isolated temporary cluster, runs the Mock workflow and verifies Job cleanup. It removes its test resources afterward. CI runs these checks on changes to `develop` and pull requests targeting it. Version tags also publish the image to GitHub Container Registry after both validation jobs pass.

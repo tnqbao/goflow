@@ -44,8 +44,10 @@ fi
 
 docker build -t "$image" .
 image_owned=1
+./tests/docker-smoke.sh "$image"
 cluster_owned=1
-kind create cluster --name "$cluster" --kubeconfig "$kubeconfig" --wait 120s
+kind create cluster --name "$cluster" --kubeconfig "$kubeconfig" \
+  --image kindest/node:v1.32.2@sha256:f226345927d7e348497136874b6d207e0b32cc52154ad8323129352923a3142f --wait 120s
 kind load docker-image "$image" --name "$cluster"
 helm install kubereel ./charts/kubereel --kubeconfig "$kubeconfig" --namespace kubereel-test --create-namespace \
   --set image.repository=kubereel-e2e --set "image.tag=$suffix" --set image.pullPolicy=Never --wait --timeout 120s
