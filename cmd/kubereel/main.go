@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -16,20 +17,42 @@ import (
 	"github.com/a-h/templ"
 	"github.com/tnqbao/kubereel/internal/config"
 	"github.com/tnqbao/kubereel/internal/database"
+	"github.com/tnqbao/kubereel/internal/mock"
 	"github.com/tnqbao/kubereel/internal/web"
 )
 
 func main() {
-	if len(os.Args) > 2 || (len(os.Args) == 2 && os.Args[1] != "serve") {
-		fmt.Fprintln(os.Stderr, "usage: kubereel [serve]")
-		os.Exit(2)
-	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, config.Load()); err != nil {
+	if err := execute(ctx, os.Args[1:], config.Load()); err != nil {
 		slog.Error("application stopped", "error", err)
 		os.Exit(1)
 	}
+}
+
+func execute(ctx context.Context, args []string, cfg config.Config) error {
+	if len(args) == 0 {
+		return run(ctx, cfg)
+	}
+	if args[0] == "serve" && len(args) == 1 {
+		return run(ctx, cfg)
+	}
+	if args[0] != "worker" && args[0] != "render" {
+		return fmt.Errorf("usage: kubereel serve | worker --input PATH --output PATH | render --input PATH --output PATH")
+	}
+	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	input := flags.String("input", "", "input artifact path")
+	output := flags.String("output", "", "output artifact path")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *input == "" || *output == "" {
+		return fmt.Errorf("%s requires --input and --output", args[0])
+	}
+	if args[0] == "worker" {
+		return mock.Generate(ctx, *input, *output)
+	}
+	return mock.Render(ctx, *input, *output)
 }
 
 func run(ctx context.Context, cfg config.Config) (runErr error) {

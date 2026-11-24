@@ -82,6 +82,30 @@ func TestServeStopsOnCancellation(t *testing.T) {
 	}
 }
 
+func TestWorkerAndRenderCommands(t *testing.T) {
+	dir := t.TempDir()
+	request := filepath.Join(dir, "request.json")
+	scene := filepath.Join(dir, "scene.svg")
+	final := filepath.Join(dir, "final.svg")
+	if err := os.WriteFile(request, []byte(`{"prompt":"A scene"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"worker", "--input", request, "--output", scene},
+		{"render", "--input", scene, "--output", final},
+	} {
+		if err := execute(context.Background(), args, config.Config{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := os.Stat(final); err != nil {
+		t.Fatal(err)
+	}
+	if err := execute(context.Background(), []string{"worker"}, config.Config{}); err == nil {
+		t.Fatal("worker accepted missing paths")
+	}
+}
+
 func TestHomeAssets(t *testing.T) {
 	handler := routes(testDB(t))
 	home := httptest.NewRecorder()
