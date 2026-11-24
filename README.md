@@ -31,9 +31,13 @@ Existing local data and volumes are not moved or deleted automatically; back the
 
 ## Docker
 
+The image runs as a non-root user and includes FFmpeg. The current `render`
+command still copies the Mock SVG; FFmpeg-based rendering is planned for F19.
+
 ```sh
 docker build -t kubereel:local .
 docker run --rm -p 127.0.0.1:8080:8080 -v kubereel-data:/data kubereel:local serve
+./tests/docker-smoke.sh kubereel:local
 ```
 
 `docker compose up --build` also starts the standalone service and uses the `kubereel-data` volume.
