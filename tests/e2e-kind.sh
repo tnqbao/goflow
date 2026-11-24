@@ -100,6 +100,58 @@ if ! grep -q 'spec.steps' "$workdir/invalid.log"; then
   cat "$workdir/invalid.log" >&2
   exit 1
 fi
+kubectl --kubeconfig "$kubeconfig" wait --for=condition=Established crd/videoruns.kubereel.io --timeout=60s
+cat >"$workdir/videorun.yaml" <<'YAML'
+apiVersion: kubereel.io/v1alpha1
+kind: VideoRun
+metadata:
+  name: sample-run
+  namespace: kubereel-test
+spec:
+  workflowRef: sample
+  workflowSnapshot:
+    steps:
+      - name: script
+        type: llm
+        providerRef: mock
+  inputs:
+    topic: {stringValue: forest}
+    clips: {integerValue: 2}
+    enabled: {booleanValue: false}
+    scale: {numberValue: 1.5}
+  execution: {maxConcurrentSteps: 2, timeoutSeconds: 60}
+YAML
+kubectl --kubeconfig "$kubeconfig" apply -f "$workdir/videorun.yaml"
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test patch videorun sample-run --type=merge -p '{"spec":{"cancelRequested":true}}'
+if kubectl --kubeconfig "$kubeconfig" -n kubereel-test patch videorun sample-run --type=merge -p '{"spec":{"workflowSnapshot":{"steps":[{"name":"changed","type":"output"}]}}}' >"$workdir/immutable.log" 2>&1; then
+  printf 'VideoRun snapshot update was accepted\n' >&2
+  exit 1
+fi
+if ! grep -q 'workflow snapshot is immutable' "$workdir/immutable.log"; then
+  cat "$workdir/immutable.log" >&2
+  exit 1
+fi
+if kubectl --kubeconfig "$kubeconfig" -n kubereel-test patch videorun sample-run --type=merge -p '{"spec":{"inputs":{"topic":{"integerValue":1}}}}' >"$workdir/invalid-input.log" 2>&1; then
+  printf 'VideoRun input with multiple values was accepted\n' >&2
+  exit 1
+fi
+if ! grep -q 'exactly one input value is required' "$workdir/invalid-input.log"; then
+  cat "$workdir/invalid-input.log" >&2
+  exit 1
+fi
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test patch videorun sample-run --subresource=status --type=merge -p '{"status":{"phase":"Running","steps":[{"name":"script","phase":"Running","attempts":1,"providerRequestID":"request-1"}],"artifacts":["artifact-1"],"startedAt":"2026-01-01T00:00:00Z"}}'
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test get videorun sample-run -o json >"$workdir/videorun.json"
+python3 - "$workdir/videorun.json" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as source:
+    run = json.load(source)
+assert run["spec"]["cancelRequested"] is True
+assert run["spec"]["inputs"]["enabled"]["booleanValue"] is False
+assert run["spec"]["workflowSnapshot"]["steps"][0]["name"] == "script"
+assert run["status"]["phase"] == "Running"
+assert run["status"]["steps"][0]["providerRequestID"] == "request-1"
+assert run["status"]["artifacts"] == ["artifact-1"]
+PY
 kubectl --kubeconfig "$kubeconfig" -n kubereel-test port-forward --address 127.0.0.1 service/kubereel-kubereel :8080 >"$workdir/forward.log" 2>&1 &
 forward_pid=$!
 port=""

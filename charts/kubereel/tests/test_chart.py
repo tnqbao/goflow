@@ -16,13 +16,13 @@ def render(*values):
         capture_output=True,
         check=True,
     )
-    return {item["kind"]: item for item in yaml.safe_load_all(result.stdout) if item}
+    return {item["metadata"]["name"] if item["kind"] == "CustomResourceDefinition" else item["kind"]: item for item in yaml.safe_load_all(result.stdout) if item}
 
 
 class ChartTest(unittest.TestCase):
     def test_video_workflow_crd_is_included(self):
         docs = render("--include-crds")
-        crd = docs["CustomResourceDefinition"]
+        crd = docs["videoworkflows.kubereel.io"]
         self.assertEqual(crd["metadata"]["name"], "videoworkflows.kubereel.io")
         self.assertEqual(crd["spec"]["scope"], "Namespaced")
         version = crd["spec"]["versions"][0]
@@ -30,6 +30,20 @@ class ChartTest(unittest.TestCase):
         self.assertTrue(version["served"] and version["storage"])
         spec = version["schema"]["openAPIV3Schema"]["properties"]["spec"]
         self.assertEqual(set(spec["properties"]), {"description", "inputs", "steps", "outputs"})
+
+    def test_video_run_crd(self):
+        docs = render("--include-crds")
+        run = docs["videoruns.kubereel.io"]
+        self.assertEqual(run["spec"]["scope"], "Namespaced")
+        version = run["spec"]["versions"][0]
+        self.assertEqual(version["name"], "v1alpha1")
+        self.assertEqual(version["subresources"], {"status": {}})
+        schema = version["schema"]["openAPIV3Schema"]["properties"]
+        self.assertEqual(set(schema["spec"]["required"]), {"workflowRef", "workflowSnapshot"})
+        snapshot = dict(schema["spec"]["properties"]["workflowSnapshot"])
+        self.assertEqual(snapshot.pop("x-kubernetes-validations")[0]["rule"], "self == oldSelf")
+        workflow = docs["videoworkflows.kubereel.io"]["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
+        self.assertEqual(snapshot, workflow)
 
     def test_defaults(self):
         docs = render()

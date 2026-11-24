@@ -1,0 +1,283 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: videoruns.kubereel.io
+spec:
+  group: kubereel.io
+  scope: Namespaced
+  names:
+    plural: videoruns
+    singular: videorun
+    kind: VideoRun
+    shortNames:
+    - vrun
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    subresources:
+      status: {}
+    schema:
+      openAPIV3Schema:
+        type: object
+        required:
+        - spec
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            required:
+            - workflowRef
+            - workflowSnapshot
+            properties:
+              workflowRef:
+                type: string
+                minLength: 1
+                maxLength: 253
+              inputs:
+                type: object
+                maxProperties: 100
+                additionalProperties:
+                  type: object
+                  x-kubernetes-validations:
+                  - rule: '[has(self.stringValue), has(self.integerValue), has(self.numberValue),
+                      has(self.booleanValue)].filter(x, x).size() == 1'
+                    message: exactly one input value is required
+                  properties:
+                    stringValue:
+                      type: string
+                      maxLength: 8192
+                    integerValue:
+                      type: integer
+                      format: int64
+                    numberValue:
+                      type: number
+                    booleanValue:
+                      type: boolean
+              execution:
+                type: object
+                properties:
+                  maxConcurrentSteps:
+                    type: integer
+                    minimum: 1
+                    maximum: 100
+                  timeoutSeconds:
+                    type: integer
+                    minimum: 1
+                    maximum: 86400
+              cancelRequested:
+                type: boolean
+                default: false
+              workflowSnapshot:
+                type: object
+                required:
+                - steps
+                properties:
+                  description:
+                    type: string
+                    maxLength: 4096
+                  inputs:
+                    type: array
+                    maxItems: 100
+                    x-kubernetes-list-type: map
+                    x-kubernetes-list-map-keys:
+                    - name
+                    items:
+                      type: object
+                      required:
+                      - name
+                      - type
+                      properties:
+                        name:
+                          type: string
+                          minLength: 1
+                          maxLength: 63
+                        type:
+                          type: string
+                          enum:
+                          - string
+                          - integer
+                          - number
+                          - boolean
+                        required:
+                          type: boolean
+                        description:
+                          type: string
+                          maxLength: 1024
+                  steps:
+                    type: array
+                    minItems: 1
+                    maxItems: 100
+                    x-kubernetes-list-type: map
+                    x-kubernetes-list-map-keys:
+                    - name
+                    items:
+                      type: object
+                      required:
+                      - name
+                      - type
+                      properties:
+                        name:
+                          type: string
+                          minLength: 1
+                          maxLength: 63
+                        type:
+                          type: string
+                          enum:
+                          - input
+                          - llm
+                          - image
+                          - video
+                          - ffmpeg
+                          - output
+                        dependsOn:
+                          type: array
+                          maxItems: 100
+                          x-kubernetes-list-type: set
+                          items:
+                            type: string
+                            minLength: 1
+                            maxLength: 63
+                        providerRef:
+                          type: string
+                          minLength: 1
+                          maxLength: 253
+                        retry:
+                          type: object
+                          properties:
+                            maxAttempts:
+                              type: integer
+                              minimum: 1
+                              maximum: 100
+                        timeoutSeconds:
+                          type: integer
+                          minimum: 1
+                          maximum: 86400
+                        resources:
+                          type: object
+                          properties:
+                            requests:
+                              type: object
+                              properties:
+                                cpu:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 32
+                                memory:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 32
+                            limits:
+                              type: object
+                              properties:
+                                cpu:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 32
+                                memory:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 32
+                  outputs:
+                    type: array
+                    maxItems: 100
+                    x-kubernetes-list-type: map
+                    x-kubernetes-list-map-keys:
+                    - name
+                    items:
+                      type: object
+                      required:
+                      - name
+                      - from
+                      properties:
+                        name:
+                          type: string
+                          minLength: 1
+                          maxLength: 63
+                        from:
+                          type: string
+                          minLength: 1
+                          maxLength: 63
+                x-kubernetes-validations:
+                - rule: self == oldSelf
+                  message: workflow snapshot is immutable
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                - Cancelling
+                - Cancelled
+                - RequiresReview
+              steps:
+                type: array
+                maxItems: 100
+                x-kubernetes-list-type: map
+                x-kubernetes-list-map-keys:
+                - name
+                items:
+                  type: object
+                  required:
+                  - name
+                  - phase
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                      maxLength: 63
+                    phase:
+                      type: string
+                      enum:
+                      - Pending
+                      - Running
+                      - Succeeded
+                      - Failed
+                      - Cancelling
+                      - Cancelled
+                      - RequiresReview
+                    jobName:
+                      type: string
+                      maxLength: 253
+                    providerRequestID:
+                      type: string
+                      maxLength: 1024
+                    attempts:
+                      type: integer
+                      minimum: 0
+                      maximum: 100
+                    error:
+                      type: string
+                      maxLength: 4096
+                    startedAt:
+                      type: string
+                      format: date-time
+                    completedAt:
+                      type: string
+                      format: date-time
+              artifacts:
+                type: array
+                maxItems: 100
+                x-kubernetes-list-type: set
+                items:
+                  type: string
+                  minLength: 1
+                  maxLength: 253
+              error:
+                type: string
+                maxLength: 4096
+              startedAt:
+                type: string
+                format: date-time
+              completedAt:
+                type: string
+                format: date-time
