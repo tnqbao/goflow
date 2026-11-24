@@ -39,4 +39,6 @@ By default, the PVC uses `ReadWriteOnce` and Jobs are placed on the same node as
 
 Standalone `serve` currently starts the web UI without workflow execution. Deployment requirements and implementation status are documented in [SPEC.md](SPEC.md).
 
+`docker compose up --build` also starts the standalone UI. The Compose volume retains its legacy `goflow-data` name to avoid replacing existing data.
+
 To verify the Mock workflow on an isolated temporary Kubernetes cluster, install `kind`, Docker, Helm, kubectl and Python 3, then run `tests/e2e-kind.sh`. The script builds an image, creates a temporary kind cluster, runs the workflow and verifies Job cleanup, then removes its test resources.

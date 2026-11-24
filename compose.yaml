@@ -1,11 +1,11 @@
 services:
-  goflow:
+  kubereel:
     build: .
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
       - goflow-data:/data
-    shm_size: 1gb
+    command: ["serve"]
     restart: unless-stopped
 
 volumes:

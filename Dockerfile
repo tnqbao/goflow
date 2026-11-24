@@ -10,9 +10,9 @@ FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates wget \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd --system --gid 10001 goflow \
-    && useradd --system --uid 10001 --gid goflow --home-dir /data goflow \
-    && install -d -o goflow -g goflow -m 0700 /data
+    && groupadd --system --gid 10001 kubereel \
+    && useradd --system --uid 10001 --gid kubereel --home-dir /data kubereel \
+    && install -d -o kubereel -g kubereel -m 0700 /data
 COPY --from=build /out/kubereel /usr/local/bin/kubereel
 USER 10001:10001
 WORKDIR /data
