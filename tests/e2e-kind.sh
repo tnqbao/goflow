@@ -100,6 +100,30 @@ while time.monotonic() < deadline:
     time.sleep(2)
 else:
     raise RuntimeError('workflow timed out')
+
+with urllib.request.urlopen(base + '/workflows', timeout=5) as response:
+    if b'Run mock workflow' not in response.read():
+        raise RuntimeError('mock workflow form missing')
+form = urllib.request.Request(base + '/workflows', data=b'prompt=UI+mock+workflow', headers={'Content-Type': 'application/x-www-form-urlencoded'}, method='POST')
+with urllib.request.urlopen(form, timeout=5) as response:
+    ui_id = response.geturl().rsplit('/', 1)[-1]
+    if b'Workflow status' not in response.read():
+        raise RuntimeError('mock workflow status page missing')
+deadline = time.monotonic() + 120
+while time.monotonic() < deadline:
+    with urllib.request.urlopen(base + '/api/workflows/' + ui_id, timeout=5) as response:
+        workflow = json.load(response)
+    if workflow['status'] == 'failed':
+        raise RuntimeError(workflow.get('error', 'UI workflow failed'))
+    if workflow['status'] == 'succeeded':
+        with urllib.request.urlopen(base + '/workflows/' + ui_id, timeout=5) as response:
+            if b'Download mock SVG' not in response.read():
+                raise RuntimeError('completed UI workflow has no artifact link')
+        print('Mock workflow UI verified')
+        break
+    time.sleep(2)
+else:
+    raise RuntimeError('UI workflow timed out')
 PY
 
 workflow_id=$(cat "$workdir/workflow-id")

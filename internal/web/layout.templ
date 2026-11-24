@@ -22,6 +22,11 @@ templ Layout(title string) {
 						} else {
 							<a class="sidebar-item" href="/">Projects</a>
 						}
+						if title == "Mock workflow" {
+							<a class="sidebar-item" href="/workflows" aria-current="page">Mock workflow</a>
+						} else {
+							<a class="sidebar-item" href="/workflows">Mock workflow</a>
+						}
 						<p class="sidebar-label">Settings</p>
 						if title == "Providers" {
 							<a class="sidebar-item" href="/settings/providers" aria-current="page">Providers</a>

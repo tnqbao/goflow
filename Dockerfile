@@ -2,7 +2,7 @@ FROM golang:1.23.3-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY main.go runtime.go ./
+COPY main.go runtime.go workflow_ui.go ./
 COPY internal/ ./internal/
 RUN CGO_ENABLED=0 go build -trimpath -o /out/kubereel .
 

@@ -24,7 +24,7 @@ helm install kubereel ./charts/kubereel --set image.repository=YOUR_REGISTRY/kub
 kubectl port-forward service/kubereel-kubereel 8080:8080
 ```
 
-Create a mock workflow and follow the `Location` response header to check its status:
+Open `/workflows` in the web UI to run a mock workflow, or use the REST API and follow the `Location` response header to check its status:
 
 ```sh
 curl -i -X POST http://localhost:8080/api/workflows \

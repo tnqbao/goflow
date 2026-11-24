@@ -3,5 +3,6 @@
 !go.sum
 !main.go
 !runtime.go
+!workflow_ui.go
 !internal/
 !internal/**

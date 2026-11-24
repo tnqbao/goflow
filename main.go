@@ -72,6 +72,7 @@ func run(ctx context.Context, cfg config.Config) (runErr error) {
 	mux := routes(db)
 	if controller != nil {
 		api.Workflows{Store: store, DataDir: filepath.Dir(cfg.Database), Providers: provider.NewManager()}.Register(mux)
+		registerWorkflowUI(mux, store)
 		controllerCtx, cancel := context.WithCancel(ctx)
 		done := make(chan struct{})
 		go func() {
@@ -82,6 +83,10 @@ func run(ctx context.Context, cfg config.Config) (runErr error) {
 			cancel()
 			<-done
 		}()
+	} else {
+		mux.HandleFunc("GET /workflows", func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "Mock workflows require Kubernetes mode", http.StatusServiceUnavailable)
+		})
 	}
 
 	server := &http.Server{
