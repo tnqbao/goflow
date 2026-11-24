@@ -245,6 +245,8 @@ spec:
                       - Cancelling
                       - Cancelled
                       - RequiresReview
+                    ready:
+                      type: boolean
                     jobName:
                       type: string
                       maxLength: 253

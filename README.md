@@ -11,7 +11,7 @@ The project is in initial development. Its target architecture is a modular mono
 - A Go service exposes health endpoints, an embedded interface and an experimental workflow API.
 - In Kubernetes mode, the control plane persists workflow state and creates worker and render Jobs using the same image.
 - The built-in Mock produces a labeled SVG placeholder without external services or credentials. It does **not** yet produce video or an MP4.
-- The `VideoWorkflow`, `VideoRun`, and `VideoProvider` CRDs define configuration and execution records; they are not yet connected to execution. A DAG validator checks step dependencies and cycles, but is not yet wired into reconciliation. The DAG engine, FFmpeg rendering, provider integrations, authentication and target `/api/v1` API remain roadmap work.
+- The `VideoWorkflow`, `VideoRun`, and `VideoProvider` CRDs define configuration and execution records. The VideoRun controller validates snapshots and marks pending steps ready when their dependencies succeed; it does not yet create Jobs for those steps. FFmpeg rendering, provider integrations, authentication and the target `/api/v1` API remain roadmap work.
 
 The current management API and interface do not provide authentication. Keep them on a trusted network and use local port forwarding; do not expose them publicly.
 
@@ -69,7 +69,7 @@ The chart defaults to a 10 GiB PVC and five concurrent Jobs. It currently suppor
 
 Helm installs the `VideoWorkflow`, `VideoRun`, and `VideoProvider` CRDs on initial installation, but does not upgrade or delete CRDs automatically. When upgrading an existing installation, install new CRDs separately with `kubectl apply -f charts/kubereel/crds/` before upgrading the chart. Back up custom resources and review CRD changes first. Deleting a CRD deletes all its resources in the cluster.
 
-`VideoRun` stores a required immutable copy of the workflow spec. Input values are represented by exactly one of `stringValue`, `integerValue`, `numberValue`, or `booleanValue`. Status is updated through the Kubernetes status subresource; creating a `VideoRun` does not yet start execution.
+`VideoRun` stores a required immutable copy of the workflow spec. Input values are represented by exactly one of `stringValue`, `integerValue`, `numberValue`, or `booleanValue`. The controller records validation failures and ready steps through the Kubernetes status subresource; creating a `VideoRun` does not yet start execution.
 
 `VideoProvider` stores provider configuration and references credentials by a Secret name and key in the same namespace. It does not activate an integration; Gemini and fal.ai adapters are future tasks. The HTTPS syntax check on `baseURL` does not replace endpoint and SSRF validation before a provider uses it.
 

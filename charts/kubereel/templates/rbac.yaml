@@ -18,6 +18,12 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get"]
+  - apiGroups: ["kubereel.io"]
+    resources: ["videoruns"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kubereel.io"]
+    resources: ["videoruns/status"]
+    verbs: ["update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

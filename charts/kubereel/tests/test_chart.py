@@ -72,6 +72,8 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(env["KUBEREEL_SHARED_STORAGE"], "false")
         self.assertEqual(env["KUBEREEL_PVC"], docs["PersistentVolumeClaim"]["metadata"]["name"])
         self.assertEqual(docs["Role"]["rules"][0]["verbs"], ["get", "list", "create", "delete"])
+        self.assertIn({"apiGroups": ["kubereel.io"], "resources": ["videoruns"], "verbs": ["get", "list", "watch"]}, docs["Role"]["rules"])
+        self.assertIn({"apiGroups": ["kubereel.io"], "resources": ["videoruns/status"], "verbs": ["update"]}, docs["Role"]["rules"])
         self.assertEqual(container["livenessProbe"]["httpGet"]["path"], "/healthz")
         self.assertEqual(container["readinessProbe"]["httpGet"]["path"], "/readyz")
         self.assertEqual(pod["securityContext"]["fsGroup"], 10001)

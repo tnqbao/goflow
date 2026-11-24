@@ -29,10 +29,19 @@ type Controller struct {
 	Config        JobConfig
 	DataDir       string
 	MaxConcurrent int
+	VideoRuns     *VideoRunController
 }
 
 // Run reconciles durable workflow state until the control plane stops.
 func (c *Controller) Run(ctx context.Context) {
+	if c.VideoRuns != nil {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			c.VideoRuns.Run(ctx)
+		}()
+		defer func() { <-done }()
+	}
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {

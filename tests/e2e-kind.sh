@@ -152,6 +152,50 @@ assert run["status"]["phase"] == "Running"
 assert run["status"]["steps"][0]["providerRequestID"] == "request-1"
 assert run["status"]["artifacts"] == ["artifact-1"]
 PY
+cat >"$workdir/reconcile-runs.yaml" <<'YAML'
+apiVersion: kubereel.io/v1alpha1
+kind: VideoRun
+metadata:
+  name: dag-valid
+  namespace: kubereel-test
+spec:
+  workflowRef: sample
+  workflowSnapshot:
+    steps:
+      - {name: first, type: input}
+      - {name: second, type: output, dependsOn: [first]}
+      - {name: independent, type: image}
+---
+apiVersion: kubereel.io/v1alpha1
+kind: VideoRun
+metadata:
+  name: dag-invalid
+  namespace: kubereel-test
+spec:
+  workflowRef: sample
+  workflowSnapshot:
+    steps:
+      - {name: first, type: input, dependsOn: [missing]}
+YAML
+kubectl --kubeconfig "$kubeconfig" apply -f "$workdir/reconcile-runs.yaml"
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test wait --for=jsonpath='{.status.phase}'=Pending videorun/dag-valid --timeout=60s
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test wait --for=jsonpath='{.status.phase}'=Failed videorun/dag-invalid --timeout=60s
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test get videorun dag-valid -o json >"$workdir/dag-valid.json"
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test get videorun dag-invalid -o json >"$workdir/dag-invalid.json"
+python3 - "$workdir/dag-valid.json" "$workdir/dag-invalid.json" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as source:
+    valid = json.load(source)
+with open(sys.argv[2], encoding="utf-8") as source:
+    invalid = json.load(source)
+steps = {step["name"]: step for step in valid["status"]["steps"]}
+assert steps["first"]["ready"] is True
+assert steps["second"]["ready"] is False
+assert steps["independent"]["ready"] is True
+assert "unknown dependency" in invalid["status"]["error"]
+PY
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test patch videorun dag-valid --subresource=status --type=merge -p '{"status":{"steps":[{"name":"first","phase":"Succeeded"},{"name":"second","phase":"Pending"},{"name":"independent","phase":"Pending"}]}}'
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test wait --for=jsonpath='{.status.steps[1].ready}'=true videorun/dag-valid --timeout=60s
 kubectl --kubeconfig "$kubeconfig" wait --for=condition=Established crd/videoproviders.kubereel.io --timeout=60s
 cat >"$workdir/videoprovider.yaml" <<'YAML'
 apiVersion: kubereel.io/v1alpha1

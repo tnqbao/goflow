@@ -12,6 +12,7 @@ import (
 	"github.com/tnqbao/kubereel/internal/workflow"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	batchclient "k8s.io/client-go/kubernetes/typed/batch/v1"
 	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
@@ -62,10 +63,18 @@ func controllerFromEnv(ctx context.Context, store *workflow.Store, dataDir strin
 	if err != nil {
 		return nil, fmt.Errorf("create Kubernetes storage client: %w", err)
 	}
+	dynamicClient, err := dynamic.NewForConfig(cluster)
+	if err != nil {
+		return nil, fmt.Errorf("create VideoRun client: %w", err)
+	}
+	runs := dynamicClient.Resource(kubernetes.VideoRunResource()).Namespace(namespace)
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if _, err := jobs.List(probeCtx, metav1.ListOptions{Limit: 1}); err != nil {
 		return nil, fmt.Errorf("verify Kubernetes job access: %w", err)
+	}
+	if _, err := runs.List(probeCtx, metav1.ListOptions{Limit: 1}); err != nil {
+		return nil, fmt.Errorf("verify VideoRun access: %w", err)
 	}
 	claim, err := core.PersistentVolumeClaims(namespace).Get(probeCtx, config.Claim, metav1.GetOptions{})
 	if err != nil {
@@ -74,7 +83,7 @@ func controllerFromEnv(ctx context.Context, store *workflow.Store, dataDir strin
 	if !supportsStorage(claim.Spec.AccessModes, config.SharedStorage) {
 		return nil, fmt.Errorf("PVC access modes do not support configured workflow placement")
 	}
-	return &kubernetes.Controller{Store: store, Jobs: jobs, Config: config, DataDir: dataDir, MaxConcurrent: maximum}, nil
+	return &kubernetes.Controller{Store: store, Jobs: jobs, Config: config, DataDir: dataDir, MaxConcurrent: maximum, VideoRuns: &kubernetes.VideoRunController{Runs: runs}}, nil
 }
 
 func supportsStorage(modes []corev1.PersistentVolumeAccessMode, shared bool) bool {
