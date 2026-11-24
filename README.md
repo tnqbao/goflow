@@ -5,7 +5,7 @@ KubeReel is a self-hosted filmmaking workspace transitioning from GoFlow to a si
 Run locally:
 
 ```sh
-KUBEREEL_DATA_DIR=./data go run ./cmd/kubereel serve
+KUBEREEL_DATA_DIR=./data go run . serve
 ```
 
 Open `http://localhost:8080`. For compatibility, existing installations may still use `GOFLOW_DATA_DIR`; `KUBEREEL_DATA_DIR` takes precedence. The existing `goflow.db` filename is retained to preserve data.
