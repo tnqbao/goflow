@@ -11,7 +11,7 @@ The project is in initial development. Its target architecture is a modular mono
 - A Go service exposes health endpoints, an embedded interface and an experimental workflow API.
 - In Kubernetes mode, the control plane persists workflow state and creates worker and render Jobs using the same image.
 - The built-in Mock produces a labeled SVG placeholder without external services or credentials. It does **not** yet produce video or an MP4.
-- The `VideoWorkflow`, `VideoRun`, and `VideoProvider` CRDs define configuration and execution records; they are not yet connected to execution. The DAG engine, FFmpeg rendering, provider integrations, authentication and target `/api/v1` API remain roadmap work.
+- The `VideoWorkflow`, `VideoRun`, and `VideoProvider` CRDs define configuration and execution records; they are not yet connected to execution. A DAG validator checks step dependencies and cycles, but is not yet wired into reconciliation. The DAG engine, FFmpeg rendering, provider integrations, authentication and target `/api/v1` API remain roadmap work.
 
 The current management API and interface do not provide authentication. Keep them on a trusted network and use local port forwarding; do not expose them publicly.
 
