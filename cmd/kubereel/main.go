@@ -8,17 +8,25 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/a-h/templ"
-	"github.com/tnqbao/goflow/internal/config"
-	"github.com/tnqbao/goflow/internal/database"
-	"github.com/tnqbao/goflow/internal/web"
+	"github.com/tnqbao/kubereel/internal/config"
+	"github.com/tnqbao/kubereel/internal/database"
+	"github.com/tnqbao/kubereel/internal/web"
 )
 
 func main() {
-	if err := run(context.Background(), config.Load()); err != nil {
+	if len(os.Args) > 2 || (len(os.Args) == 2 && os.Args[1] != "serve") {
+		fmt.Fprintln(os.Stderr, "usage: kubereel [serve]")
+		os.Exit(2)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, config.Load()); err != nil {
 		slog.Error("application stopped", "error", err)
 		os.Exit(1)
 	}
@@ -37,15 +45,35 @@ func run(ctx context.Context, cfg config.Config) (runErr error) {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	slog.Info("starting HTTP server", "address", cfg.Address)
-	return server.ListenAndServe()
+	return serve(ctx, server)
+}
+
+func serve(ctx context.Context, server *http.Server) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- server.ListenAndServe() }()
+	select {
+	case err := <-stopped:
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shut down server: %w", err)
+		}
+		err := <-stopped
+		if !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}
 }
 
 func initialize(ctx context.Context, cfg config.Config) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(cfg.Database), 0700); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
-	}
-	if err := os.MkdirAll(cfg.BrowserData, 0700); err != nil {
-		return nil, fmt.Errorf("create browser directory: %w", err)
 	}
 	db, err := database.Open(ctx, cfg.Database)
 	if err != nil {

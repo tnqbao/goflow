@@ -42,7 +42,7 @@ func Layout(title string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, " · GoFlow</title><link rel=\"stylesheet\" href=\"/static/app.css\"><script src=\"/static/htmx.min.js\" defer></script></head><body><a class=\"skip-link\" href=\"#main-content\">Skip to content</a><div class=\"app-shell\"><aside class=\"sidebar\" aria-label=\"Workspace\"><a class=\"brand\" href=\"/\" aria-label=\"GoFlow home\">GoFlow<span aria-hidden=\"true\">.</span></a><p class=\"sidebar-label\">Workspace</p><nav aria-label=\"Main navigation\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, " · KubeReel</title><link rel=\"stylesheet\" href=\"/static/app.css\"><script src=\"/static/htmx.min.js\" defer></script></head><body><a class=\"skip-link\" href=\"#main-content\">Skip to content</a><div class=\"app-shell\"><aside class=\"sidebar\" aria-label=\"Workspace\"><a class=\"brand\" href=\"/\" aria-label=\"KubeReel home\">KubeReel<span aria-hidden=\"true\">.</span></a><p class=\"sidebar-label\">Workspace</p><nav aria-label=\"Main navigation\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

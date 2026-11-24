@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tnqbao/goflow/internal/config"
+	"github.com/tnqbao/kubereel/internal/config"
 )
 
 func TestRoutes(t *testing.T) {
@@ -62,6 +62,26 @@ func TestRunListenError(t *testing.T) {
 	}
 }
 
+func TestServeStopsOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	server := &http.Server{
+		Addr: "127.0.0.1:0",
+		BaseContext: func(net.Listener) context.Context {
+			close(started)
+			return context.Background()
+		},
+	}
+	go func() {
+		<-started
+		cancel()
+	}()
+	if err := serve(ctx, server); err != nil {
+		t.Fatalf("serve after cancellation: %v", err)
+	}
+}
+
 func TestHomeAssets(t *testing.T) {
 	handler := routes(testDB(t))
 	home := httptest.NewRecorder()
@@ -91,7 +111,7 @@ func TestHomeAssets(t *testing.T) {
 func testConfig(t *testing.T) config.Config {
 	t.Helper()
 	dir := t.TempDir()
-	return config.Config{Address: "127.0.0.1:0", Database: filepath.Join(dir, "data", "goflow.db"), BrowserData: filepath.Join(dir, "data", "browser")}
+	return config.Config{Address: "127.0.0.1:0", Database: filepath.Join(dir, "data", "goflow.db")}
 }
 
 func testDB(t *testing.T) *sql.DB {
@@ -128,13 +148,6 @@ func TestInitializePreservesData(t *testing.T) {
 	}
 	if id != 42 {
 		t.Errorf("saved id = %d, want 42", id)
-	}
-	info, err := os.Stat(cfg.BrowserData)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !info.IsDir() || info.Mode().Perm()&0077 != 0 {
-		t.Errorf("browser directory mode = %s", info.Mode())
 	}
 }
 
