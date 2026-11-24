@@ -4,7 +4,7 @@ import "testing"
 
 func TestManagerAvailability(t *testing.T) {
 	manager := NewManager()
-	if !manager.Available("mock") || manager.Available("google-flow") || manager.Available("unknown") {
+	if !manager.Available("mock") || manager.Available("unknown") || len(manager.List()) != 1 {
 		t.Fatal("incorrect provider availability")
 	}
 	items := manager.List()

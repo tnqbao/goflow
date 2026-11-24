@@ -8,7 +8,7 @@ import (
 
 //go:generate go run github.com/a-h/templ/cmd/templ@v0.3.1001 generate
 
-//go:embed static/app.css static/htmx.min.js
+//go:embed static/app.css
 var assets embed.FS
 
 // Assets serves the embedded static files.

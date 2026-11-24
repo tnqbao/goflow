@@ -1,3 +1,4 @@
+// Package provider manages the available execution providers.
 package provider
 
 // Info describes a provider's execution availability.
@@ -11,7 +12,7 @@ type Manager struct{ providers []Info }
 
 // NewManager initializes the built-in provider registry.
 func NewManager() *Manager {
-	return &Manager{providers: []Info{{ID: "mock", Available: true}, {ID: "google-flow", Available: false}}}
+	return &Manager{providers: []Info{{ID: "mock", Available: true}}}
 }
 
 // List returns a copy so callers cannot change the registry.

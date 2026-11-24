@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/a-h/templ"
 	"github.com/tnqbao/kubereel/internal/api"
 	"github.com/tnqbao/kubereel/internal/config"
 	"github.com/tnqbao/kubereel/internal/database"
@@ -134,9 +133,9 @@ func initialize(ctx context.Context, cfg config.Config) (*sql.DB, error) {
 
 func routes(db *sql.DB) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle("GET /{$}", templ.Handler(web.Home()))
-	mux.Handle("GET /settings/providers", templ.Handler(web.Providers(false)))
-	mux.Handle("POST /settings/providers/google-flow/connect", templ.Handler(web.Providers(true), templ.WithStatus(http.StatusNotImplemented)))
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/workflows", http.StatusSeeOther)
+	})
 	mux.Handle("GET /static/", web.Assets())
 	mux.HandleFunc("GET /healthz", health)
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {

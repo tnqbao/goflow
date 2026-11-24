@@ -68,9 +68,9 @@ with urllib.request.urlopen(base + '/api/providers', timeout=5) as response:
     providers = json.load(response)
 if not any(p['id'] == 'mock' and p['available'] for p in providers):
     raise RuntimeError('Mock provider is unavailable')
-if not any(p['id'] == 'google-flow' and not p['available'] for p in providers):
-    raise RuntimeError('Google Flow availability is incorrect')
-blocked = urllib.request.Request(base + '/api/workflows', data=b'{"prompt":"test","provider":"google-flow"}', headers={'Content-Type': 'application/json'}, method='POST')
+if len(providers) != 1:
+    raise RuntimeError('unexpected provider in registry')
+blocked = urllib.request.Request(base + '/api/workflows', data=b'{"prompt":"test","provider":"unknown"}', headers={'Content-Type': 'application/json'}, method='POST')
 try:
     urllib.request.urlopen(blocked, timeout=5)
 except urllib.error.HTTPError as error:

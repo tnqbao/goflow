@@ -1,6 +1,6 @@
 # KubeReel
 
-KubeReel is a self-hosted filmmaking workspace transitioning from GoFlow to a single-image Go control plane. Its Kubernetes mode runs mock workflows as worker and render Jobs. The mock provider produces an SVG placeholder, not AI-generated video or images.
+KubeReel is a self-hosted filmmaking workspace with a single-image Go control plane. Its Kubernetes mode runs mock workflows as worker and render Jobs. The mock provider produces an SVG placeholder, not AI-generated video or images.
 
 Run locally:
 
@@ -8,7 +8,9 @@ Run locally:
 KUBEREEL_DATA_DIR=./data go run . serve
 ```
 
-Open `http://localhost:8080`. For compatibility, existing installations may still use `GOFLOW_DATA_DIR`; `KUBEREEL_DATA_DIR` takes precedence. The existing `goflow.db` filename is retained to preserve data.
+The data directory defaults to `/data` and the database is named `kubereel.db`. Health endpoints are available at `http://localhost:8080/healthz` and `/readyz`.
+
+Existing local data and volumes are not moved or deleted automatically; back them up before changing data locations.
 
 Build the single application image:
 
@@ -33,12 +35,12 @@ curl http://localhost:8080/api/workflows/WORKFLOW_ID
 curl -o mock-scene.svg http://localhost:8080/api/workflows/WORKFLOW_ID/artifact
 ```
 
-`GET /api/providers` lists execution availability. Workflow requests default to `mock` and may explicitly specify `"provider":"mock"`. Google Flow remains unavailable until an authorized direct HTTP integration is verified.
+`GET /api/providers` lists execution availability. Workflow requests default to `mock` and may explicitly specify `"provider":"mock"`.
 
-By default, the PVC uses `ReadWriteOnce` and Jobs are placed on the same node as the control plane. For multi-node execution, provide `ReadWriteMany` storage and set `persistence.accessMode=ReadWriteMany`. To use an existing claim, set `persistence.existingClaim` and set `persistence.accessMode` to match the claim. The previous `charts/goflow` release used different resource names: back up and preserve its PVC before migrating; do not uninstall it until data has been migrated or safely retained.
+By default, the PVC uses `ReadWriteOnce` and Jobs are placed on the same node as the control plane. For multi-node execution, provide `ReadWriteMany` storage and set `persistence.accessMode=ReadWriteMany`. To use an existing claim, set `persistence.existingClaim` and set `persistence.accessMode` to match the claim.
 
-Standalone `serve` currently starts the web UI without workflow execution. Deployment requirements and implementation status are documented in [SPEC.md](SPEC.md).
+Standalone `serve` currently exposes health endpoints; workflow execution and its UI require Kubernetes mode. Deployment requirements are documented in [SPEC.md](SPEC.md).
 
-`docker compose up --build` also starts the standalone UI. The Compose volume retains its legacy `goflow-data` name to avoid replacing existing data.
+`docker compose up --build` also starts the standalone service. It uses the `kubereel-data` volume.
 
 To verify the Mock workflow on an isolated temporary Kubernetes cluster, install `kind`, Docker, Helm, kubectl and Python 3, then run `tests/e2e-kind.sh`. The script builds an image, creates a temporary kind cluster, runs the workflow and verifies Job cleanup, then removes its test resources.

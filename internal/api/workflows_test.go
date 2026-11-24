@@ -27,7 +27,7 @@ func TestWorkflowEndpoints(t *testing.T) {
 	(Workflows{Store: store, DataDir: dir, Providers: provider.NewManager()}).Register(mux)
 	providers := httptest.NewRecorder()
 	mux.ServeHTTP(providers, httptest.NewRequest(http.MethodGet, "/api/providers", nil))
-	if providers.Code != http.StatusOK || !strings.Contains(providers.Body.String(), `"id":"mock","available":true`) || !strings.Contains(providers.Body.String(), `"id":"google-flow","available":false`) {
+	if providers.Code != http.StatusOK || strings.TrimSpace(providers.Body.String()) != `[{"id":"mock","available":true}]` {
 		t.Fatalf("provider list: %d %s", providers.Code, providers.Body.String())
 	}
 	request := httptest.NewRecorder()
@@ -70,7 +70,7 @@ func TestWorkflowEndpoints(t *testing.T) {
 	if artifact.Code != http.StatusOK || artifact.Body.String() != "<svg/>" {
 		t.Fatalf("artifact: %d %s", artifact.Code, artifact.Body.String())
 	}
-	for _, body := range []string{`{"prompt":""}`, `{"prompt":"hi","extra":1}`, `{"prompt":"hi"}{}`, `{"prompt":"hi","provider":"google-flow"}`} {
+	for _, body := range []string{`{"prompt":""}`, `{"prompt":"hi","extra":1}`, `{"prompt":"hi"}{}`, `{"prompt":"hi","provider":"unknown"}`} {
 		response := httptest.NewRecorder()
 		mux.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/workflows", strings.NewReader(body)))
 		if response.Code != http.StatusBadRequest {

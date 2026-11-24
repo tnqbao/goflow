@@ -4,9 +4,9 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
-      - goflow-data:/data
+      - kubereel-data:/data
     command: ["serve"]
     restart: unless-stopped
 
 volumes:
-  goflow-data:
+  kubereel-data:

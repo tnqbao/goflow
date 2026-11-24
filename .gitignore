@@ -1,10 +1,10 @@
 # Local binaries and test output
 /bin/
-/goflow
+/kubereel
 *.test
 coverage.out
 
-# Local data and browser profiles
+# Local data
 /data/
 *.db
 *.db-shm

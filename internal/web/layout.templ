@@ -8,7 +8,6 @@ templ Layout(title string) {
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<title>{ title } · KubeReel</title>
 			<link rel="stylesheet" href="/static/app.css"/>
-			<script src="/static/htmx.min.js" defer></script>
 		</head>
 		<body>
 			<a class="skip-link" href="#main-content">Skip to content</a>
@@ -17,21 +16,10 @@ templ Layout(title string) {
 					<a class="brand" href="/" aria-label="KubeReel home">KubeReel<span aria-hidden="true">.</span></a>
 					<p class="sidebar-label">Workspace</p>
 					<nav aria-label="Main navigation">
-						if title == "Projects" {
-							<a class="sidebar-item" href="/" aria-current="page">Projects</a>
-						} else {
-							<a class="sidebar-item" href="/">Projects</a>
-						}
 						if title == "Mock workflow" {
 							<a class="sidebar-item" href="/workflows" aria-current="page">Mock workflow</a>
 						} else {
 							<a class="sidebar-item" href="/workflows">Mock workflow</a>
-						}
-						<p class="sidebar-label">Settings</p>
-						if title == "Providers" {
-							<a class="sidebar-item" href="/settings/providers" aria-current="page">Providers</a>
-						} else {
-							<a class="sidebar-item" href="/settings/providers">Providers</a>
 						}
 					</nav>
 				</aside>

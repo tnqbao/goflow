@@ -66,7 +66,7 @@ func MockWorkflowForm(message string) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, " <form class=\"mock-form\" action=\"/workflows\" method=\"post\"><label for=\"prompt\">Scene description</label> <textarea id=\"prompt\" name=\"prompt\" maxlength=\"8192\" required rows=\"5\"></textarea> <button class=\"provider-button\" type=\"submit\">Run mock workflow</button></form>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, " <form class=\"mock-form\" action=\"/workflows\" method=\"post\"><label for=\"prompt\">Scene description</label> <textarea id=\"prompt\" name=\"prompt\" maxlength=\"8192\" required rows=\"5\"></textarea> <button class=\"mock-button\" type=\"submit\">Run mock workflow</button></form>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

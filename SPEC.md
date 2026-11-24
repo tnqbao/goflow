@@ -1,280 +1,1107 @@
-# KubeReel — Product Specification and Implementation Plan
+# KubeReel — Product & Technical Specification
 
-> Migration in progress: the user renamed GoFlow to KubeReel and replaced the
-> deployment direction with the architecture below. Older GoFlow-specific
-> requirements and roadmap entries are retained as historical context and must
-> not override these newer requirements. This document does not yet define the
-> workflow, provider, rendering, or public API contracts in detail.
+Version: 2.0.0  
+Status: Initial Development  
+Architecture: Kubernetes-native Modular Monolith  
+Deployment: Single Image, Single Control Plane
 
-## Current deployment architecture
+## 0. Mandatory Project Migration
 
-- One Dockerfile, one image and one Go executable. The control plane runs the
-  REST API, Kubernetes operator, workflow engine, scheduler and provider manager
-  in the same process; static frontend assets are embedded using `go:embed`.
-- Helm defaults to one Deployment, one replica and one permanent application
-  container. Kubernetes mode provisions temporary Jobs using that same image
-  for `kubereel worker` and `kubereel render`, with resource limits and cleanup.
-- `kubereel serve` starts the control plane. Components use context cancellation
-  and graceful shutdown. Worker and render commands are required but not yet
-  implemented.
-- PVC storage is the default. Worker placement must respect PVC access modes;
-  unrestricted multi-node execution requires shared or S3-compatible storage.
-- The default Helm installation must support a complete mock-provider workflow
-  without external credentials or additional infrastructure. A future optional
-  embedded mode executes tasks in bounded worker pools for standalone Docker.
-- Direct HTTP provider integration follows the later P05 request. Browser
-  automation, a persistent Chrome runtime, CAPTCHA bypass and manual Google
-  session copying are not the intended production architecture.
+This specification completely replaces all previous GoFlow specifications, requirements, roadmaps, and architectural decisions.
 
-## Implementation status
+KubeReel is a new product developed from the existing repository.
 
-The single executable implements `serve`, `worker` and `render`. In Kubernetes
-mode, the control plane persists workflow state, exposes a REST API and provider
-registry, and reconciles Mock worker and render Jobs using the same image.
-The Mock provider produces an explicitly labeled SVG artifact, not generated
-video. The Helm chart defaults to one control-plane replica and an RWO PVC; RWO
-Jobs are scheduled on the same node, and RWX storage enables multi-node Jobs.
-Jobs have resource limits and are deleted after completion, with TTL cleanup as
-a fallback. The control plane validates the PVC's actual access modes.
+GoFlow is discontinued.
 
-Embedded execution is a future mode. Google Flow and other real generation
-providers remain unavailable until their direct HTTP authentication and API
-contracts are verified; the Mock provider is not evidence of real generation.
-The current chart expects the configured image to be available to cluster nodes.
+The existing Google Flow integration must not be preserved as a legacy feature, optional feature, disabled feature, or future integration.
 
-**Version:** 0.1.0
-**Status:** Ready for incremental implementation
-**Primary language:** Go
-**Development branch:** `develop`
+### Mandatory Removal
 
-## 1. Vision and principles
+Remove all obsolete components related to:
 
-GoFlow is a lightweight, self-hosted AI filmmaking workspace that interacts with a user's existing Google Flow account. Users organize projects, characters, scripts, references, and scenes; generate scenes from scripts; review outputs; and regenerate unsatisfactory scenes.
+- Google Flow integration.
+- Google Flow authentication.
+- Google Flow OAuth.
+- Google Flow session management.
+- Google Flow credit management.
+- Browser automation.
+- Chrome and Chromium dependencies.
+- Playwright, Rod, and chromedp dependencies used for browser automation.
+- Browser extensions.
+- Cookie extraction and management.
+- Reverse-engineered Google endpoints.
+- Google Flow project management.
+- Legacy Seedance and Grok UI placeholders.
+- Obsolete frontend pages and routes.
+- Obsolete environment variables.
+- Obsolete configuration files.
+- Obsolete tests and documentation specific to discontinued features.
 
-- Zero configuration by default; easy Docker and Helm deployment.
-- One application container, one HTTP port, one main Go binary.
-- Go-native server-rendered Web UI, not a desktop GUI or SPA.
-- SQLite stores workspace metadata and persistent job state.
-- Google Flow remains the primary location for generated videos; no S3, MinIO, or permanent local video archive.
-- Browser automation is an experimental integration that must be validated before functionality is declared supported.
-- Clean, creative workspace UI rather than an industrial dashboard.
+Do not preserve obsolete code for backward compatibility.
 
-### Out of scope for v0.1
+Do not introduce replacement browser automation mechanisms.
 
-Multi-user SaaS, billing, PostgreSQL, Redis, RabbitMQ, microservices, FFmpeg rendering, complex timeline editing, Seedance/Grok integration, and native desktop apps.
+Google Gemini integration is permitted only through documented official Gemini APIs.
 
-## 2. Technology stack
+Google Gemini API and Google Flow are separate products.
 
-| Area | Technology |
-| --- | --- |
-| Backend | Go, `net/http`, optionally `chi` if routing warrants it |
-| UI | `templ`, HTMX, vanilla CSS |
-| Static assets | `go:embed` |
-| Database | SQLite via `modernc.org/sqlite` |
-| Browser automation | `chromedp` and Chromium |
-| Jobs | Go goroutines with durable SQLite state |
-| Progress updates | Server-Sent Events |
-| Logging | `log/slog` |
-| Packaging | Multi-stage Docker image and Helm chart |
-| Tests | Go standard testing package |
+Preserve Git history, unrelated user changes, and genuinely reusable infrastructure.
 
-Avoid adding dependencies before they are needed. Node.js must not be required at runtime. Chromium is a separate process inside the same container.
+Audit the repository before removing components.
 
-## 3. User journey
+Do not rename the remote repository or change the Go module path without confirming the canonical repository location.
 
-1. Install and launch GoFlow; it initializes `/data` and SQLite automatically.
-2. Open the Web UI on port `8080`.
-3. Choose a provider: **Google Flow** has an active **Connect with Google** button; **Seedance** and **Grok** are visibly dimmed and disabled with “Coming soon”.
-4. Connect through a dedicated Chromium profile and an interactive, secure sign-in flow. No Google password is collected by GoFlow.
-5. Create a project, add characters and references, write a script, and review a proposed scene breakdown.
-6. Generate scenes in the linked Google Flow project, review results, revise prompts, and regenerate individual scenes without losing generation history.
+## 1. Product Definition
 
-Google OAuth is not equivalent to an authenticated Google Flow browser session. The login mechanism must be proven on localhost and on a remote container/cluster before promising one-click connection. Do not expose a Chromium debugging port publicly or bypass CAPTCHA or service restrictions.
+KubeReel is an open-source, self-hosted, Kubernetes-native infrastructure platform for automated AI video production.
 
-## 4. Workspace and navigation
+KubeReel enables users to design reusable video production workflows, connect external AI providers, execute distributed workloads, process media, and generate downloadable videos.
 
-```text
-GoFlow
-├── Projects
-│   ├── Project A
-│   │   ├── Overview
-│   │   ├── Characters
-│   │   ├── Script
-│   │   ├── Scenes
-│   │   └── References
-│   └── Project B
-│       ├── Overview
-│       ├── Characters
-│       ├── Script
-│       ├── Scenes
-│       └── References
-└── Settings
-    └── Providers
-```
+KubeReel is not an AI model.
 
-All characters, scripts, scenes, and references belong to exactly one project. No global asset library in v0.1.
+KubeReel is not a browser automation tool.
 
-### Projects
+KubeReel is not an AI subscription gateway.
 
-Create, rename, delete with confirmation, open workspace, and link to a Google Flow project when supported. Fields: name, description, aspect ratio, preferred model, Flow project reference, timestamps.
+KubeReel is a video production orchestration platform.
 
-### Characters
+Product slogan:
 
-Create/edit project-local characters with name, role, appearance, personality, clothing, optional voice description, and image references. Link characters to scenes.
+Install once. Connect your providers. Automate video production.
 
-### Script
+## 2. Product Objectives
 
-Write, paste, save, edit, and version scripts. Set target film and scene durations. Break down scripts into editable scene drafts, including title, description, dialogue, characters, setting, camera instructions, prompt, and estimated duration. Script analysis requires a separately validated AI capability; do not assume it is freely available through Flow browser automation.
+- Provide one-command Helm installation.
+- Require minimal user configuration.
+- Support complete demonstrations without paid APIs.
+- Allow users to connect their own AI providers.
+- Automate repetitive video production tasks.
+- Support parallel and distributed workload execution.
+- Provide reliable execution and failure recovery.
+- Support cloud and on-premises Kubernetes environments.
+- Provide a simple Web UI and documented REST API.
 
-### Scenes
+## 3. User Experience
 
-Scenes are ordered and have title, description, prompt, optional negative prompt when supported, model, aspect ratio, duration, characters, references, and generation state.
+The expected user journey is:
 
-States: `draft`, `ready`, `queued`, `generating`, `completed`, `failed`, `needs_review`, `approved`.
+1. Install KubeReel using Helm.
+2. Access the Web Dashboard.
+3. Complete initial authentication setup.
+4. Configure AI providers using API keys.
+5. Select or create a video workflow.
+6. Enter workflow parameters.
+7. Execute the workflow.
+8. Monitor execution progress.
+9. Preview generated media.
+10. Download the final video.
 
-Allow manual creation, prompt editing, generation, review, individual regeneration, approval, and reordering. Preserve every generation and prompt revision; never overwrite history.
+Users must not need to manually create Kubernetes Jobs, Secrets, ConfigMaps, or workflow YAML files for normal usage.
 
-### References
+## 4. Technology Stack
 
-Support character, environment, style, and scene-specific images. Store necessary metadata and provider references. Temporary local files are allowed for browser uploads when required, but not permanent video storage.
+### Core
 
-## 5. Google Flow integration
+- Golang.
+- Gin.
+- Kubernetes.
+- client-go.
+- controller-runtime.
+- Kubebuilder.
+- Helm.
+- Docker.
+- FFmpeg.
 
-Keep browser-specific code behind a small internal provider interface. Potential operations include connect/status, project listing/linking/creation, model discovery, generation submission, and status retrieval. **These are intended application capabilities, not guaranteed public Google Flow APIs.**
+### Frontend
 
-Each operation requires a feasibility check against the actual browser UI. Return a typed unsupported error for unavailable operations. Do not invent selectors or silently fall back to unrelated services.
+- React.
+- TypeScript.
+- Vite.
+- Tailwind CSS.
+- React Flow.
 
-Browser worker responsibilities: launch/stop Chromium, persist a dedicated profile, detect session expiration, manage one active session, submit verified actions, observe jobs, recover from crashes, and handle timeouts.
+### Infrastructure
 
-Generation may consume Flow credits. Persist job IDs and submission states, bound concurrency, never silently retry an uncertain submission, and ask before resubmitting when duplication is possible. No credit-consuming tests by default.
+- Kubernetes Custom Resources.
+- PersistentVolumeClaim.
+- Optional S3-compatible object storage.
+- AWS EKS for cloud validation.
+- AWS S3 for distributed artifact storage.
 
-Video assets remain on Google Flow. SQLite stores metadata, IDs, statuses, and available references. Stable direct video URLs and long-term availability must not be assumed.
+### Engineering
 
-## 6. UI/UX
+- GitHub Actions.
+- Prometheus.
+- OpenTelemetry.
+- Go testing.
+- envtest.
+- Kind.
 
-Creative, modern, minimal, responsive, accessible workspace. Use a project sidebar, main script/scene editor, contextual prompt/reference panel, scene gallery, small connection indicator, clear empty/loading/error states, and reusable controls. Avoid enterprise dashboard charts and excessive animations. Prefer server-rendered `templ` components and HTMX; use small JavaScript only where needed.
+Use stable, supported, explicitly pinned dependency versions.
 
-## 7. Data model
+## 5. Architecture
 
-Initial planned tables:
+KubeReel must use a modular monolith architecture.
 
-```text
-projects
-characters
-scripts
-script_versions
-scenes
-scene_characters
-references
-scene_references
-generations
-generation_jobs
-provider_connections
-settings
-```
+The default installation must contain exactly one permanent application container.
 
-Use foreign keys, migrations, transactions, and necessary indexes. Enable SQLite foreign key enforcement. Never store videos as SQLite BLOBs. Persist jobs across restarts.
+All control plane components must run inside the same Go process.
 
-Default locations: `/data/goflow.db` and `/data/browser`. Make local development defaults sensible without requiring an environment file.
+### Internal Components
 
-## 8. Deployment
+- HTTP API Server.
+- Embedded Web UI.
+- Kubernetes Operator.
+- Workflow Engine.
+- Execution Manager.
+- Scheduler.
+- Provider Manager.
+- Credential Manager.
+- Artifact Manager.
+- Observability.
 
-**Docker:** One production image containing Go server, embedded Web UI, Chromium, and dependencies. Port `8080`; persistent `/data` volume; multi-stage build; non-root where practical; health endpoints `/healthz` and `/readyz`. Chromium may require adequate shared memory.
+These components are internal Go modules, not independent microservices.
 
-Illustrative command after an image is published:
+Do not deploy separate permanent containers for the frontend, API server, scheduler, operator, or workers.
+
+### Dynamic Workloads
+
+The control plane creates temporary Kubernetes Jobs when workflow steps require execution.
+
+Temporary Jobs may run concurrently and on different Kubernetes nodes when storage configuration permits.
+
+Jobs must be cleaned up according to configurable retention policies.
+
+### External Services
+
+The application must not require:
+
+- Redis.
+- RabbitMQ.
+- PostgreSQL.
+- Kafka.
+- MinIO.
+- External workflow engines.
+- Browser runtimes.
+
+Optional external object storage is permitted.
+
+## 6. Single Image Architecture
+
+Maintain:
+
+- One Dockerfile.
+- One Docker image.
+- One Go executable.
+- One release pipeline.
+
+The executable must support the following runtime commands:
 
 ```bash
-docker run -d --name goflow -p 8080:8080 -v goflow-data:/data --shm-size=1g --restart unless-stopped ghcr.io/OWNER/goflow:latest
+kubereel serve
+kubereel worker
+kubereel render
 ```
 
-**Helm:** One Deployment replica, one Service, one PVC, optional Ingress, probes, configurable resources. Keep SQLite and browser profile on persistent storage. If no default StorageClass exists, document the required override. Do not deploy multiple active replicas against the same browser profile.
+### serve
 
-Security: Browser profile and session data are sensitive. Never expose them through APIs or commit them. Remote deployments must have authenticated access protection before enabling browser interaction. Avoid unauthenticated public exposure.
+Starts the complete control plane:
 
-## 9. Engineering process
+- REST API.
+- Web UI.
+- Kubernetes controllers.
+- Workflow scheduling.
+- Provider management.
+- Artifact management.
 
-Follow `AGENTS.md` as the mandatory source of coding-agent workflow and Git rules. Each user request maps to one focused task. Keep commits small and use `#feat/...`, `#fix/...`, or `#refactor/...` messages. Validate and push completed work to `develop`; then stop.
+### worker
 
-## 10. Incremental roadmap
+Executes a single assigned workflow step:
+
+- LLM generation.
+- Image generation.
+- Video generation.
+- Provider status polling.
+- Artifact retrieval.
+
+### render
+
+Executes media processing tasks using FFmpeg.
+
+The same Docker image must be reused for control plane and temporary execution Jobs.
+
+Frontend assets must be embedded into the Go executable using go:embed.
+
+FFmpeg must be included in the runtime image.
+
+All components must support graceful shutdown and context cancellation.
+
+## 7. Kubernetes Resources
+
+API Group: kubereel.io
+
+Initial Version: v1alpha1
+
+### 7.1 VideoWorkflow
+
+Defines a reusable workflow.
+
+Fields:
+
+- Workflow metadata.
+- Input parameter definitions.
+- Step definitions.
+- Step dependencies.
+- Provider references.
+- Retry policies.
+- Timeout policies.
+- Resource requirements.
+- Output definitions.
+
+### 7.2 VideoRun
+
+Represents an individual workflow execution.
+
+Fields:
+
+- Workflow reference.
+- Immutable workflow snapshot.
+- Input parameters.
+- Execution configuration.
+- Cancellation request.
+- Execution status.
+- Step statuses.
+- Artifact references.
+- Error information.
+- Execution timestamps.
+
+### 7.3 VideoProvider
+
+Represents an AI provider configuration.
+
+Fields:
+
+- Provider type.
+- Supported capabilities.
+- Model configuration.
+- Base URL when applicable.
+- Kubernetes Secret reference.
+- Concurrency limits.
+- Timeout configuration.
+
+API keys must not be stored directly inside Custom Resources.
+
+Use Kubernetes Secrets for credentials.
+
+Do not store binary media in Kubernetes resources or etcd.
+
+Bound resource sizes and execution history retention.
+
+## 8. Workflow Execution Model
+
+Workflows must use a Directed Acyclic Graph.
+
+Execution lifecycle:
+
+1. User creates a workflow.
+2. User submits a workflow execution.
+3. API Server creates a VideoRun.
+4. Operator watches the VideoRun.
+5. Operator validates the workflow snapshot.
+6. Operator identifies executable steps.
+7. Operator creates Kubernetes Jobs.
+8. Workers execute assigned tasks.
+9. Workers persist outputs to artifact storage.
+10. Operator observes Job status and execution results.
+11. Operator schedules dependent steps.
+12. FFmpeg renders the final video.
+13. Operator marks the VideoRun as completed.
+14. User downloads the final artifact.
+
+Independent steps must support parallel execution.
+
+The Operator must not perform long-running provider requests inside reconciliation loops.
+
+### Execution States
+
+- Pending.
+- Running.
+- Succeeded.
+- Failed.
+- Cancelling.
+- Cancelled.
+- RequiresReview.
+
+### Reliability Requirements
+
+- Idempotent reconciliation.
+- Deterministic Job identifiers.
+- Duplicate workload prevention.
+- Controller restart recovery.
+- Step-level retries.
+- Configurable timeouts.
+- Cancellation.
+- Dependency validation.
+- Cycle detection.
+- Bounded concurrency.
+- Preservation of successful step outputs.
+
+External provider request identifiers must be persisted when available.
+
+If a billable submission has an uncertain outcome, do not automatically submit another request.
+
+Mark the step as RequiresReview when safe reconciliation is impossible.
+
+Do not claim exactly-once external API execution.
+
+## 9. AI Provider Architecture
+
+KubeReel must use a Bring Your Own Key model.
+
+Users configure API keys through the Dashboard or REST API.
+
+The platform must not provide shared commercial AI credentials.
+
+Provider integrations must use documented, authorized APIs.
+
+### Provider Capabilities
+
+- Text generation.
+- Image generation.
+- Video generation.
+- Audio generation.
+
+Use capability-specific Go interfaces.
+
+Example video provider contract:
+
+```go
+type VideoProvider interface {
+    Submit(
+        ctx context.Context,
+        request VideoRequest,
+    ) (GenerationHandle, error)
+
+    GetStatus(
+        ctx context.Context,
+        handle GenerationHandle,
+    ) (GenerationStatus, error)
+
+    GetResult(
+        ctx context.Context,
+        handle GenerationHandle,
+    ) (VideoResult, error)
+}
+```
+
+Provider-specific parameters and response formats must remain inside provider adapters.
+
+Support cancellation when the provider exposes a documented cancellation API.
+
+## 10. Initial Providers
+
+### 10.1 Mock Provider
+
+Mandatory and enabled by default.
+
+Capabilities:
+
+- Generate sample scripts.
+- Generate sample images.
+- Generate valid sample video clips.
+- Simulate asynchronous generation.
+- Simulate latency.
+- Simulate failures.
+- Simulate rate limiting.
+- Support deterministic testing.
+
+No API key required.
+
+No external network requests required.
+
+The default demonstration workflow must produce a valid MP4 using only the Mock Provider and FFmpeg.
+
+### 10.2 Gemini Provider
+
+Purpose:
+
+- Generate video ideas.
+- Generate scripts.
+- Generate storyboards.
+- Generate structured prompts.
+
+Authentication:
+
+- Official Gemini API key.
+
+API documentation:
+
+https://ai.google.dev/gemini-api/docs
+
+Do not use Google OAuth for Gemini integration.
+
+Do not use Google Flow sessions, cookies, subscriptions, or credits.
+
+### 10.3 fal.ai Provider
+
+Purpose:
+
+- Text-to-image generation.
+- Text-to-video generation.
+- Image-to-video generation.
+
+Authentication:
+
+- Official fal.ai API key.
+
+API documentation:
+
+https://docs.fal.ai/
+
+Requirements:
+
+- Configurable model identifiers.
+- Asynchronous queue submission.
+- Generation status polling.
+- Artifact retrieval.
+- Provider-specific parameter validation.
+- Rate-limit handling.
+- Bounded retries.
+
+Do not hardcode undocumented endpoints.
+
+Do not assume all models support identical parameters.
+
+### Future Providers
+
+- OpenAI-compatible endpoints.
+- 9Router.
+- ComfyUI.
+- Replicate.
+- Official video generation APIs.
+
+Future providers are not part of the initial implementation.
+
+Do not create placeholder integrations for unsupported providers.
+
+## 11. Workflow Nodes
+
+### Input Node
+
+Receives workflow parameters.
+
+Examples:
+
+- Topic.
+- Video description.
+- Duration.
+- Aspect ratio.
+- Style.
+- Number of clips.
+
+### LLM Node
+
+Generates:
+
+- Ideas.
+- Scripts.
+- Scene descriptions.
+- Structured prompts.
+
+### Image Node
+
+Generates reference images and scene images.
+
+### Video Node
+
+Generates video clips through a configured video provider.
+
+### FFmpeg Node
+
+Supports controlled media processing operations:
+
+- Merge clips.
+- Trim clips.
+- Resize video.
+- Change aspect ratio.
+- Add audio.
+- Normalize media formats.
+- Render final MP4.
+
+Do not allow arbitrary shell commands.
+
+### Output Node
+
+Persists final artifacts and exposes them through the Media Library.
+
+### Future Nodes
+
+- Text-to-Speech.
+- Subtitle generation.
+- Audio generation.
+- Conditional execution.
+- Dynamic fan-out.
+- Human approval.
+- Scene regeneration.
+- Social media publishing.
+
+## 12. Example Workflow
+
+Workflow name: Horror Shorts
+
+Input:
+
+```json
+{
+  "topic": "Unknown creatures in the forest",
+  "style": "Found footage horror",
+  "aspect_ratio": "9:16"
+}
+```
+
+Execution:
+
+1. Gemini generates a script and scene prompts.
+2. Two independent image generation steps create reference images.
+3. Two video generation steps create video clips.
+4. FFmpeg merges the clips into a final video.
+5. The final video is stored in the Media Library.
+
+The initial MVP may use a fixed number of explicitly defined scenes.
+
+Dynamic scene expansion is a future feature.
+
+The same workflow must support execution with Mock Provider instead of paid providers.
+
+## 13. Web Dashboard
+
+The application must provide a clean, responsive, modern interface.
+
+### Navigation
+
+- Overview.
+- Workflows.
+- Executions.
+- Providers.
+- Media Library.
+- Settings.
+
+### Overview
+
+Display:
+
+- Total workflows.
+- Active executions.
+- Successful executions.
+- Failed executions.
+- Generated videos.
+- Recent activity.
+
+### Providers
+
+Users can:
+
+- Add a provider.
+- Configure API keys.
+- Select supported models.
+- Test provider connectivity.
+- Enable or disable configured providers.
+- Configure concurrency limits.
+
+Do not display Google Flow login buttons.
+
+Do not display unavailable provider placeholders.
+
+### Workflows
+
+Users can:
+
+- Create workflows.
+- Edit workflows.
+- Delete workflows.
+- Import and export workflow definitions.
+- Configure workflow inputs.
+- Execute workflows.
+
+### Visual Editor
+
+Use React Flow for node-based workflow editing.
+
+Support:
+
+- Drag and drop.
+- Node configuration.
+- Dependency connections.
+- Workflow validation.
+- Saving workflow definitions.
+
+### Executions
+
+Display:
+
+- Execution status.
+- Individual step status.
+- Progress.
+- Logs.
+- Errors.
+- Start and completion timestamps.
+- Retry actions.
+- Cancellation actions.
+
+### Media Library
+
+Display:
+
+- Generated images.
+- Generated clips.
+- Final videos.
+- Artifact metadata.
+- Preview.
+- Download.
+- Delete.
+
+The frontend must consume the REST API.
+
+Do not place provider credentials or business logic inside frontend code.
+
+## 14. REST API
+
+Base path: /api/v1
+
+### Providers
+
+- POST /providers
+- GET /providers
+- GET /providers/{id}
+- PATCH /providers/{id}
+- DELETE /providers/{id}
+- POST /providers/{id}/test
+
+### Workflows
+
+- POST /workflows
+- GET /workflows
+- GET /workflows/{id}
+- PATCH /workflows/{id}
+- DELETE /workflows/{id}
+
+### Executions
+
+- POST /workflows/{id}/runs
+- GET /runs
+- GET /runs/{id}
+- POST /runs/{id}/cancel
+- POST /runs/{id}/retry
+- GET /runs/{id}/logs
+- GET /runs/{id}/artifacts
+
+### Artifacts
+
+- GET /artifacts
+- GET /artifacts/{id}
+- GET /artifacts/{id}/download
+- DELETE /artifacts/{id}
+
+### System
+
+- GET /healthz
+- GET /readyz
+- GET /metrics
+- GET /version
+
+Requirements:
+
+- OpenAPI documentation.
+- Consistent structured responses.
+- Input validation.
+- Authentication.
+- Authorization.
+- Pagination.
+- Safe error handling.
+- SSE for live execution updates where appropriate.
+
+## 15. Artifact Storage
+
+Implement a storage abstraction.
+
+Supported artifacts:
+
+- JSON.
+- Text.
+- Images.
+- Video clips.
+- Audio.
+- Final MP4 files.
+- Execution manifests.
+
+### Default Storage
+
+PVC-backed filesystem storage.
+
+The default deployment must support a single-node Kubernetes cluster.
+
+For ReadWriteOnce storage, ensure worker placement is compatible with volume topology and access restrictions.
+
+### Production Storage
+
+Optional S3-compatible storage.
+
+Support AWS S3 for multi-node cloud deployments.
+
+Use workload identity where available.
+
+Do not require static AWS credentials when workload identity can be used.
+
+### Requirements
+
+- Unique artifact identifiers.
+- Atomic artifact publication where possible.
+- Configurable retention.
+- Safe cleanup.
+- Protected downloads.
+- File size limits.
+- Path traversal prevention.
+
+## 16. Helm Installation
+
+Helm is the primary installation method.
+
+Target installation command after publication:
+
+```bash
+helm install kubereel \
+  oci://ghcr.io/OWNER/charts/kubereel \
+  --namespace kubereel \
+  --create-namespace
+```
+
+The Helm Chart must install:
+
+- One Deployment.
+- One permanent application container.
+- One Service.
+- One ServiceAccount.
+- Required RBAC resources.
+- Three CRDs.
+- One PVC.
+- Required configuration.
+
+Optional:
+
+- Ingress.
+- NetworkPolicy.
+- ServiceMonitor.
+
+Temporary execution Jobs must not be deployed as permanent workloads.
+
+### Default Configuration
+
+```yaml
+replicaCount: 1
+
+execution:
+  mode: kubernetes
+  maxConcurrentJobs: 5
+
+storage:
+  type: pvc
+  size: 10Gi
+
+providers:
+  mock:
+    enabled: true
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+```
+
+The values above define the intended configuration contract.
+
+The actual chart must use pinned release image versions.
+
+### Zero-config Requirements
+
+A user with a supported Kubernetes cluster and a compatible default StorageClass must be able to install and run the demonstration workflow without:
+
+- AI API keys.
+- External databases.
+- External message brokers.
+- External object storage.
+- GPU hardware.
+- Browser installation.
+- Manual Kubernetes resource configuration.
+
+Provide a secure initial administrator setup.
+
+Document Helm upgrade, uninstall, backup, and CRD migration behavior.
+
+## 17. Security
+
+- Namespace-scoped application resources.
+- Least-privilege RBAC.
+- Separate restricted worker identity where necessary.
+- Kubernetes Secrets for provider credentials.
+- No secrets in logs.
+- No secrets in API responses.
+- Authenticated management endpoints.
+- Protected artifact access.
+- Non-root containers.
+- Resource limits.
+- Restricted container privileges.
+- SSRF protection.
+- Safe provider endpoint validation.
+- Safe FFmpeg arguments.
+- No arbitrary shell execution.
+- No privileged containers.
+- No hostPath mounts by default.
+
+Management APIs must not be publicly exposed without authentication.
+
+## 18. Resource Management
+
+Support:
+
+- Maximum concurrent workflows.
+- Maximum concurrent Jobs.
+- Provider concurrency limits.
+- CPU requests and limits.
+- Memory requests and limits.
+- Job deadlines.
+- Retry limits.
+- Artifact size limits.
+- Maximum generation requests per execution.
+
+Delegate Pod placement to the Kubernetes scheduler.
+
+Do not implement a custom Kubernetes scheduler in the MVP.
+
+GPU workloads are optional future functionality.
+
+## 19. Observability
+
+Provide structured logging.
+
+Every execution log must include relevant identifiers:
+
+- Workflow ID.
+- Run ID.
+- Step ID.
+- Job ID.
+
+Prometheus metrics:
+
+- Active workflow executions.
+- Completed executions.
+- Failed executions.
+- Execution duration.
+- Step duration.
+- Active Jobs.
+- Provider request duration.
+- Provider errors.
+- Retry counts.
+- Generated artifacts.
+
+Do not use unbounded execution identifiers as Prometheus metric labels.
+
+Support health and readiness probes.
+
+## 20. Cost Management
+
+Users are responsible for external provider charges.
+
+The MVP must support:
+
+- Explicit opt-in for paid provider execution.
+- Maximum generation requests.
+- Provider concurrency limits.
+- Retry limits.
+- Configurable duration limits.
+- Provider request tracking.
+
+Estimated cost information may be displayed only when reliable pricing data is available.
+
+Never claim estimated costs are actual charges.
+
+Advanced budget enforcement and provider routing are future features.
+
+## 21. Repository Structure
+
+```text
+kubereel/
+├── cmd/
+│   └── kubereel/
+│       └── main.go
+├── api/
+│   └── v1alpha1/
+├── internal/
+│   ├── app/
+│   ├── server/
+│   ├── controller/
+│   ├── workflow/
+│   ├── executor/
+│   ├── scheduler/
+│   ├── provider/
+│   │   ├── mock/
+│   │   ├── gemini/
+│   │   └── fal/
+│   ├── renderer/
+│   ├── storage/
+│   ├── config/
+│   └── observability/
+├── web/
+├── charts/
+│   └── kubereel/
+├── config/
+│   ├── crd/
+│   └── rbac/
+├── examples/
+├── tests/
+├── docs/
+├── .github/
+│   └── workflows/
+├── Dockerfile
+├── Makefile
+├── go.mod
+├── README.md
+├── SPEC.md
+└── AGENTS.md
+```
+
+This structure is a target, not a requirement to create empty directories.
+
+Reuse existing components only when they are compatible with the new architecture.
+
+## 22. Testing
+
+Required testing:
+
+- Unit tests.
+- Provider adapter tests using fake HTTP servers.
+- Workflow DAG validation tests.
+- Kubernetes controller tests.
+- Job execution tests.
+- Restart recovery tests.
+- Duplicate workload prevention tests.
+- FFmpeg output validation.
+- Helm rendering tests.
+- Kind end-to-end tests.
+
+Automated tests must use Mock Provider by default.
+
+Do not make paid API requests during automated tests.
+
+## 23. Development Roadmap
+
+### Phase 0 — Migration
+
+- F01: Audit and remove discontinued GoFlow functionality.
+- F02: Rename application and update project documentation.
 
 ### Phase 1 — Foundation
 
-| ID | Task |
-| --- | --- |
-| F01 | Initialize Go module/repository foundation |
-| F02 | HTTP server, routing, health checks |
-| F03 | templ, HTMX, base CSS |
-| F04 | Layout and reusable UI primitives |
-| F05 | SQLite and migrations |
-| F06 | Zero-config initialization |
-| F07 | Production Dockerfile and Compose |
-| F08 | Helm chart |
+- F03: Initialize single-executable application.
+- F04: Implement application lifecycle management.
+- F05: Implement initial Docker image.
+- F06: Implement initial Helm Chart.
+- F07: Configure CI/CD and Kind testing.
 
-### Phase 2 — Provider connection
+### Phase 2 — Kubernetes Core
 
-| ID | Task |
-| --- | --- |
-| P01 | Provider interfaces and connection states |
-| P02 | Provider selection UI; disabled Seedance/Grok |
-| P03 | Chromium lifecycle |
-| P04 | Persistent browser profile |
-| P05 | Interactive Google login feasibility prototype |
-| P06 | Verified Google Flow connection status |
-| P07 | Session recovery and disconnect |
+- F08: Implement VideoWorkflow CRD.
+- F09: Implement VideoRun CRD.
+- F10: Implement VideoProvider CRD.
+- F11: Implement DAG validation.
+- F12: Implement workflow reconciliation.
+- F13: Implement Kubernetes Job execution.
+- F14: Implement retry and cancellation.
+- F15: Implement restart recovery.
 
-P05 is a **feasibility gate**: do not mark browser sign-in complete without real end-to-end validation in the intended deployment environment.
+### Phase 3 — Video Production
 
-### Phase 3 — Project workspace
+- F16: Implement artifact storage.
+- F17: Implement provider interfaces.
+- F18: Implement Mock Provider.
+- F19: Implement FFmpeg rendering.
+- F20: Complete Mock Provider end-to-end workflow.
+- F21: Implement Gemini provider.
+- F22: Implement fal.ai provider.
 
-| ID | Task |
-| --- | --- |
-| W01 | Project database model |
-| W02 | Project CRUD |
-| W03 | Project selection UI |
-| W04 | Workspace navigation |
-| W05 | Character management |
-| W06 | Project references |
-| W07 | Script editor and versioning |
-| W08 | Scene management |
+### Phase 4 — Product
 
-### Phase 4 — Flow integration
+- F23: Implement authentication.
+- F24: Implement provider management API.
+- F25: Implement workflow management API.
+- F26: Implement execution management API.
+- F27: Implement artifact management API.
+- F28: Implement scheduled execution.
+- F29: Implement observability.
+- F30: Implement embedded Web Dashboard.
+- F31: Implement visual workflow editor.
+- F32: Implement Media Library.
 
-| ID | Task |
-| --- | --- |
-| G01 | Investigate Flow project navigation |
-| G02 | Verified project linking |
-| G03 | Discover supported models |
-| G04 | Verified generation submission |
-| G05 | Generation status tracking |
-| G06 | Scene/generation association |
-| G07 | Generation history |
-| G08 | Individual scene regeneration |
+### Phase 5 — Cloud Validation
 
-### Phase 5 — AI filmmaking workflow
+- F33: Validate Helm installation.
+- F34: Implement S3 storage.
+- F35: Deploy to AWS EKS.
+- F36: Validate distributed workloads.
+- F37: Benchmark throughput and recovery.
+- F38: Publish the MVP release.
 
-| ID | Task |
-| --- | --- |
-| A01 | Structured script breakdown schema |
-| A02 | Scene breakdown provider interface |
-| A03 | Validated AI script analysis adapter |
-| A04 | Editable scene drafts |
-| A05 | Batch generation queue |
-| A06 | Scene review and approval |
-| A07 | Regeneration with prompt revisions |
-| A08 | Final project review workspace |
+Implement one task at a time.
 
-## 11. Definition of done
+Do not implement the entire roadmap in one request.
 
-A task is done only if its acceptance criteria are met, code is formatted and tested, errors are handled, no redundant or nested-`if` code is introduced, secrets are absent, and its focused commit has been pushed successfully to `develop`. Report incomplete/blocked status honestly if any condition fails.
+## 24. MVP Acceptance Criteria
 
-## 12. First task — F01
+The MVP is accepted when:
 
-**Scope:** Reuse existing `go.mod`; create a minimal, idiomatic repository structure, entry point, zero-config defaults (without implementing a full config subsystem), `.gitignore`, README, and a basic startup test. Ensure the application builds and `go test ./...` passes.
+- Helm installs one permanent application container.
+- No obsolete Google Flow functionality exists in active application code.
+- No browser automation dependencies remain.
+- The Dashboard is served by the Go application.
+- Users can configure AI providers.
+- Users can create and execute workflows.
+- The Operator dynamically provisions Kubernetes Jobs.
+- Independent workflow steps execute concurrently.
+- Mock Provider produces a complete downloadable MP4.
+- Official Gemini and fal.ai integrations are implemented and validated.
+- Controller restarts preserve execution state.
+- Duplicate reconciliation does not create duplicate workloads.
+- Provider credentials remain protected.
+- Automated tests pass.
+- Installation documentation is complete.
 
-**Exclusions:** No database, browser worker, Google auth, project CRUD, frontend components, Docker image, or Helm chart.
+## 25. Cloud Native Validation
 
-**Acceptance:** Builds, tests pass, minimal dependencies, adheres to `AGENTS.md`.
+Deploy the completed application to AWS EKS.
 
-**Commit:** `#feat/initialize-goflow-foundation`
-**Push:** `origin develop`
-**Stop:** Do not begin F02 until explicitly requested.
+Validate:
+
+- Helm deployment.
+- Multi-node workload execution.
+- AWS S3 artifact storage.
+- Workload identity.
+- Resource isolation.
+- Concurrent workflow execution.
+- Controller recovery.
+- Job failure recovery.
+- Observability.
+
+Publish only actual measured benchmark results.
+
+Do not introduce AWS-specific dependencies into the core workflow engine.
+
+## 26. Final Architectural Rule
+
+KubeReel must remain a lightweight, Kubernetes-native video production infrastructure platform.
+
+The default product is one image, one permanent container, one Helm release, and dynamically provisioned execution workloads.
+
+Google Flow is discontinued and must not be restored.
+
+Any conflicting legacy requirement is superseded by this specification.

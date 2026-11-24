@@ -26,12 +26,9 @@ func TestRoutes(t *testing.T) {
 		{http.MethodHead, "/healthz", http.StatusOK},
 		{http.MethodPost, "/healthz", http.StatusMethodNotAllowed},
 		{http.MethodPost, "/readyz", http.StatusMethodNotAllowed},
-		{http.MethodGet, "/", http.StatusOK},
-		{http.MethodGet, "/settings/providers", http.StatusOK},
-		{http.MethodPost, "/settings/providers/google-flow/connect", http.StatusNotImplemented},
-		{http.MethodGet, "/settings/providers/google-flow/connect", http.StatusMethodNotAllowed},
+		{http.MethodGet, "/", http.StatusSeeOther},
+		{http.MethodGet, "/settings/providers", http.StatusNotFound},
 		{http.MethodGet, "/static/app.css", http.StatusOK},
-		{http.MethodGet, "/static/htmx.min.js", http.StatusOK},
 		{http.MethodGet, "/static/missing.css", http.StatusNotFound},
 		{http.MethodGet, "/missing", http.StatusNotFound},
 		{http.MethodGet, "/healthz/extra", http.StatusNotFound},
@@ -106,36 +103,27 @@ func TestWorkerAndRenderCommands(t *testing.T) {
 	}
 }
 
-func TestHomeAssets(t *testing.T) {
+func TestEmbeddedAssets(t *testing.T) {
 	handler := routes(testDB(t))
 	home := httptest.NewRecorder()
 	handler.ServeHTTP(home, httptest.NewRequest(http.MethodGet, "/", nil))
-	for _, want := range []string{"<h1>Projects</h1>", `href="#main-content"`, `id="main-content"`, "Your stories start here", `href="/static/app.css"`, `src="/static/htmx.min.js"`} {
-		if !strings.Contains(home.Body.String(), want) {
-			t.Errorf("home page missing %q", want)
-		}
+	if got := home.Header().Get("Location"); got != "/workflows" {
+		t.Errorf("home redirect = %q, want /workflows", got)
 	}
-	for _, tt := range []struct{ path, contentType, content string }{
-		{"/static/app.css", "text/css", "font-family"},
-		{"/static/htmx.min.js", "javascript", "htmx"},
-	} {
-		t.Run(tt.path, func(t *testing.T) {
-			response := httptest.NewRecorder()
-			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, tt.path, nil))
-			if !strings.Contains(response.Header().Get("Content-Type"), tt.contentType) {
-				t.Errorf("content type = %q, want %q", response.Header().Get("Content-Type"), tt.contentType)
-			}
-			if !strings.Contains(response.Body.String(), tt.content) {
-				t.Errorf("asset missing %q", tt.content)
-			}
-		})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/static/app.css", nil))
+	if !strings.Contains(response.Header().Get("Content-Type"), "text/css") {
+		t.Errorf("content type = %q, want text/css", response.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(response.Body.String(), "font-family") {
+		t.Error("stylesheet missing font-family")
 	}
 }
 
 func testConfig(t *testing.T) config.Config {
 	t.Helper()
 	dir := t.TempDir()
-	return config.Config{Address: "127.0.0.1:0", Database: filepath.Join(dir, "data", "goflow.db")}
+	return config.Config{Address: "127.0.0.1:0", Database: filepath.Join(dir, "data", "kubereel.db")}
 }
 
 func testDB(t *testing.T) *sql.DB {
@@ -201,35 +189,5 @@ func TestReadinessDatabaseFailure(t *testing.T) {
 		if recorder.Code != tt.status {
 			t.Errorf("%s status = %d, want %d", tt.path, recorder.Code, tt.status)
 		}
-	}
-}
-
-func TestProviderSelection(t *testing.T) {
-	handler := routes(testDB(t))
-	page := httptest.NewRecorder()
-	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/settings/providers", nil))
-	for _, want := range []string{
-		`href="/settings/providers" aria-current="page"`,
-		`<h2 id="google-flow-title">Google Flow</h2>`,
-		`action="/settings/providers/google-flow/connect"`,
-		`type="submit">Connect with Google</button>`,
-		`<h2 id="seedance-title">Seedance</h2>`,
-		`<h2 id="grok-title">Grok</h2>`,
-		"Connection is not available yet.",
-	} {
-		if !strings.Contains(page.Body.String(), want) {
-			t.Errorf("provider page missing %q", want)
-		}
-	}
-	if got := strings.Count(page.Body.String(), `type="button" disabled`); got != 2 {
-		t.Errorf("disabled provider buttons = %d, want 2", got)
-	}
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/settings/providers/google-flow/connect", nil))
-	if response.Code != http.StatusNotImplemented {
-		t.Errorf("connect status = %d, want 501", response.Code)
-	}
-	if !strings.Contains(response.Body.String(), "Google Flow connection is not available yet") {
-		t.Error("connect response does not explain that connection is unavailable")
 	}
 }

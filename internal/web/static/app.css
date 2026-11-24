@@ -48,11 +48,6 @@ a { color: inherit; }
 .eyebrow { margin: 0 0 .5rem; }
 h1 { margin: 0; font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -.05em; line-height: 1.1; }
 .page-description { margin: .75rem 0 0; color: #626e66; }
-.badge { flex: none; padding: .35rem .7rem; border-radius: 999px; background: #e6ede6; color: #355e48; font-size: .75rem; font-weight: 650; }
-.empty-state { margin-top: 3rem; padding: clamp(3rem, 8vw, 6rem) 1.5rem; border: 1px solid #e1e5dc; border-radius: 1rem; background: #fff; text-align: center; }
-.empty-state-mark { color: #759b82; font-size: 2.5rem; line-height: 1; }
-.empty-state h2 { margin: 1.5rem 0 .5rem; font-size: 1.25rem; letter-spacing: -.02em; }
-.empty-state p { max-width: 28rem; margin: 0 auto; color: #626e66; }
 
 @media (max-width: 640px) {
 	.app-shell { display: block; }
@@ -63,20 +58,7 @@ h1 { margin: 0; font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -.05em; line-
 }
 
 .sidebar-item[aria-current="page"] { background: #e2e8df; }
-.sidebar nav .sidebar-label { margin-top: 2rem; }
-.provider-list { display: grid; gap: 1rem; margin-top: 3rem; }
-.provider-card { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; padding: 1.5rem; border: 1px solid #e1e5dc; border-radius: 1rem; background: #fff; }
-.provider-card h2 { margin: 0; font-size: 1.15rem; }
-.provider-card p { margin: .4rem 0 0; color: #626e66; }
-.provider-card .provider-hint { font-size: .85rem; }
-.provider-card-disabled { background: #f4f5f1; color: #69746c; }
-.provider-button { padding: .7rem 1rem; border: 0; border-radius: .6rem; background: #315f4a; color: #fff; font: inherit; font-weight: 650; cursor: pointer; }
-.provider-button:disabled { background: #e3e7e0; color: #59665d; cursor: not-allowed; }
+.mock-button { padding: .7rem 1rem; border: 0; border-radius: .6rem; background: #315f4a; color: #fff; font: inherit; font-weight: 650; cursor: pointer; }
 .mock-form { display: grid; gap: .75rem; max-width: 40rem; }
 .mock-form textarea { width: 100%; padding: .75rem; border: 1px solid #a5b0a3; border-radius: .6rem; font: inherit; resize: vertical; }
 .mock-form button { justify-self: start; }
-.provider-notice { margin: 2rem 0 -1rem; padding: 1rem; border: 1px solid #d7cba8; border-radius: .6rem; background: #fff8e5; color: #5b4a1e; }
-
-@media (max-width: 640px) {
-	.provider-card { align-items: flex-start; flex-direction: column; }
-}
