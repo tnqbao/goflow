@@ -1,5 +1,5 @@
 image:
-  repository: goflow
+  repository: kubereel
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -10,11 +10,13 @@ persistence:
   size: 1Gi
   # Empty uses the cluster's default StorageClass.
   storageClass: ""
+  accessMode: ReadWriteOnce
+  existingClaim: ""
 
 resources: {}
 
-sharedMemory:
-  size: 1Gi
+workflow:
+  maxConcurrent: 4
 
 ingress:
   enabled: false

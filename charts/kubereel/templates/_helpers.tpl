@@ -1,14 +1,18 @@
-{{- define "goflow.fullname" -}}
+{{- define "kubereel.fullname" -}}
 {{- printf "%s-%s" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "goflow.labels" -}}
+{{- define "kubereel.claimName" -}}
+{{- default (include "kubereel.fullname" .) .Values.persistence.existingClaim -}}
+{{- end -}}
+
+{{- define "kubereel.labels" -}}
 app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
-{{- define "goflow.selectorLabels" -}}
+{{- define "kubereel.selectorLabels" -}}
 app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}

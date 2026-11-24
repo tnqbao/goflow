@@ -20,6 +20,9 @@ func TestJobRespectsStorageAndStages(t *testing.T) {
 		if pod.Containers[0].Image != cfg.Image || pod.Containers[0].Args[0] != stage {
 			t.Fatal("wrong image or command")
 		}
+		if pod.Containers[0].ImagePullPolicy != "IfNotPresent" {
+			t.Fatal("unexpected image pull policy")
+		}
 		if pod.Volumes[0].PersistentVolumeClaim.ClaimName != cfg.Claim {
 			t.Fatal("wrong PVC")
 		}

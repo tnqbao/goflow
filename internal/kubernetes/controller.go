@@ -20,6 +20,7 @@ import (
 type Jobs interface {
 	Create(context.Context, *batchv1.Job, metav1.CreateOptions) (*batchv1.Job, error)
 	Get(context.Context, string, metav1.GetOptions) (*batchv1.Job, error)
+	Delete(context.Context, string, metav1.DeleteOptions) error
 }
 
 type Controller struct {
@@ -120,11 +121,33 @@ func (c *Controller) reconcileOne(ctx context.Context, w workflow.Workflow) erro
 	if !info.Mode().IsRegular() || info.Size() == 0 {
 		return c.fail(ctx, w.ID, "render output is invalid")
 	}
-	return c.Store.Transition(ctx, w.ID, "running", "succeeded", filepath.Join("workflows", w.ID, "final.svg"), "")
+	if err := c.Store.Transition(ctx, w.ID, "running", "succeeded", filepath.Join("workflows", w.ID, "final.svg"), ""); err != nil {
+		return err
+	}
+	return c.cleanup(ctx, w.ID)
 }
 
 func (c *Controller) fail(ctx context.Context, id, message string) error {
-	return c.Store.Transition(ctx, id, "running", "failed", "", message)
+	if err := c.Store.Transition(ctx, id, "running", "failed", "", message); err != nil {
+		return err
+	}
+	return c.cleanup(ctx, id)
+}
+
+func (c *Controller) cleanup(ctx context.Context, id string) error {
+	policy := metav1.DeletePropagationBackground
+	var failures []error
+	for _, stage := range []string{"worker", "render"} {
+		job, err := Job(id, stage, c.Config)
+		if err != nil {
+			return err
+		}
+		err = c.Jobs.Delete(ctx, job.Name, metav1.DeleteOptions{PropagationPolicy: &policy})
+		if err != nil && !apierrors.IsNotFound(err) {
+			failures = append(failures, fmt.Errorf("delete %s job: %w", stage, err))
+		}
+	}
+	return errors.Join(failures...)
 }
 
 func finished(job *batchv1.Job, kind batchv1.JobConditionType) bool {

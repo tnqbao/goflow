@@ -39,6 +39,13 @@ func (j *testJobs) Get(_ context.Context, name string, _ metav1.GetOptions) (*ba
 	}
 	return job.DeepCopy(), nil
 }
+func (j *testJobs) Delete(_ context.Context, name string, _ metav1.DeleteOptions) error {
+	if _, ok := j.jobs[name]; !ok {
+		return apierrors.NewNotFound(schema.GroupResource{Resource: "jobs"}, name)
+	}
+	delete(j.jobs, name)
+	return nil
+}
 func (j *testJobs) finish(id, stage string, condition batchv1.JobConditionType) {
 	job := j.jobs["kubereel-"+id+"-"+stage]
 	job.Status.Conditions = []batchv1.JobCondition{{Type: condition, Status: corev1.ConditionTrue}}
@@ -86,6 +93,9 @@ func TestReconcileMockWorkflow(t *testing.T) {
 	}
 	if err := controller.Reconcile(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if len(jobs.jobs) != 0 {
+		t.Fatal("completed workflow jobs were not removed")
 	}
 }
 

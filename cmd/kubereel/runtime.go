@@ -10,8 +10,10 @@ import (
 
 	"github.com/tnqbao/kubereel/internal/kubernetes"
 	"github.com/tnqbao/kubereel/internal/workflow"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	batchclient "k8s.io/client-go/kubernetes/typed/batch/v1"
+	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 )
 
@@ -24,7 +26,7 @@ func controllerFromEnv(ctx context.Context, store *workflow.Store, dataDir strin
 		return nil, fmt.Errorf("unsupported execution mode %q", mode)
 	}
 	namespace := os.Getenv("KUBEREEL_NAMESPACE")
-	config := kubernetes.JobConfig{Image: os.Getenv("KUBEREEL_JOB_IMAGE"), Claim: os.Getenv("KUBEREEL_PVC"), Instance: os.Getenv("KUBEREEL_INSTANCE")}
+	config := kubernetes.JobConfig{Image: os.Getenv("KUBEREEL_JOB_IMAGE"), Claim: os.Getenv("KUBEREEL_PVC"), Instance: os.Getenv("KUBEREEL_INSTANCE"), PullPolicy: corev1.PullPolicy(os.Getenv("KUBEREEL_IMAGE_PULL_POLICY"))}
 	if namespace == "" {
 		return nil, fmt.Errorf("KUBEREEL_NAMESPACE is required")
 	}
@@ -56,10 +58,33 @@ func controllerFromEnv(ctx context.Context, store *workflow.Store, dataDir strin
 		return nil, fmt.Errorf("create Kubernetes client: %w", err)
 	}
 	jobs := batch.Jobs(namespace)
+	core, err := coreclient.NewForConfig(cluster)
+	if err != nil {
+		return nil, fmt.Errorf("create Kubernetes storage client: %w", err)
+	}
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if _, err := jobs.List(probeCtx, metav1.ListOptions{Limit: 1}); err != nil {
 		return nil, fmt.Errorf("verify Kubernetes job access: %w", err)
 	}
+	claim, err := core.PersistentVolumeClaims(namespace).Get(probeCtx, config.Claim, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("verify Kubernetes storage: %w", err)
+	}
+	if !supportsStorage(claim.Spec.AccessModes, config.SharedStorage) {
+		return nil, fmt.Errorf("PVC access modes do not support configured workflow placement")
+	}
 	return &kubernetes.Controller{Store: store, Jobs: jobs, Config: config, DataDir: dataDir, MaxConcurrent: maximum}, nil
+}
+
+func supportsStorage(modes []corev1.PersistentVolumeAccessMode, shared bool) bool {
+	for _, mode := range modes {
+		if mode == corev1.ReadWriteMany {
+			return true
+		}
+		if !shared && mode == corev1.ReadWriteOnce {
+			return true
+		}
+	}
+	return false
 }
