@@ -17,7 +17,8 @@ const maxAuthFormBytes = 4096
 
 // AuthController serves the Web UI initial setup, sign-in, and sign-out routes.
 type AuthController struct {
-	Service *service.AuthService
+	Service  *service.AuthService
+	HomePath string
 }
 
 // Register mounts Web UI authentication routes onto e.
@@ -76,7 +77,7 @@ func redirectUnauthenticatedWeb(c echo.Context) error {
 		return c.Redirect(http.StatusSeeOther, "/login")
 	}
 
-	nextTarget := sanitizeNextPath(c.Request().URL.RequestURI())
+	nextTarget := sanitizeNextPath(c.Request().URL.RequestURI(), "/workflows")
 	return c.Redirect(http.StatusSeeOther, "/login?next="+url.QueryEscape(nextTarget))
 }
 
@@ -91,7 +92,7 @@ func (ctrl AuthController) ShowSetup(c echo.Context) error {
 		return c.String(http.StatusServiceUnavailable, "unable to check setup state\n")
 	}
 	if initialized {
-		return redirectInitializedUser(c, ctrl.Service)
+		return ctrl.redirectInitializedUser(c)
 	}
 
 	return renderWithinLayout(c, http.StatusOK, "Initial setup", setupPageTmpl, setupViewData{
@@ -151,7 +152,7 @@ func (ctrl AuthController) SubmitSetup(c echo.Context) error {
 	}
 
 	middleware.SetSessionCookie(c, issued.Token, ctrl.Service.SessionTTL())
-	return c.Redirect(http.StatusSeeOther, "/workflows")
+	return c.Redirect(http.StatusSeeOther, ctrl.homePath())
 }
 
 // ShowLogin renders the administrator sign-in form.
@@ -168,11 +169,11 @@ func (ctrl AuthController) ShowLogin(c echo.Context) error {
 		return c.Redirect(http.StatusSeeOther, "/setup")
 	}
 	if hasValidBrowserSession(c, ctrl.Service) {
-		return c.Redirect(http.StatusSeeOther, sanitizeNextPath(c.QueryParam("next")))
+		return c.Redirect(http.StatusSeeOther, sanitizeNextPath(c.QueryParam("next"), ctrl.homePath()))
 	}
 
 	return renderWithinLayout(c, http.StatusOK, "Sign in", loginPageTmpl, loginViewData{
-		Next: sanitizeNextPath(c.QueryParam("next")),
+		Next: sanitizeNextPath(c.QueryParam("next"), ctrl.homePath()),
 	})
 }
 
@@ -193,7 +194,7 @@ func (ctrl AuthController) SubmitLogin(c echo.Context) error {
 
 	username := req.PostForm.Get("username")
 	password := req.PostForm.Get("password")
-	nextTarget := sanitizeNextPath(req.PostForm.Get("next"))
+	nextTarget := sanitizeNextPath(req.PostForm.Get("next"), ctrl.homePath())
 
 	issued, retryAfter, err := ctrl.Service.Login(
 		req.Context(),
@@ -258,9 +259,9 @@ func (ctrl AuthController) Logout(c echo.Context) error {
 	return c.Redirect(http.StatusSeeOther, "/login")
 }
 
-func redirectInitializedUser(c echo.Context, authSvc *service.AuthService) error {
-	if hasValidBrowserSession(c, authSvc) {
-		return c.Redirect(http.StatusSeeOther, "/workflows")
+func (ctrl AuthController) redirectInitializedUser(c echo.Context) error {
+	if hasValidBrowserSession(c, ctrl.Service) {
+		return c.Redirect(http.StatusSeeOther, ctrl.homePath())
 	}
 
 	return c.Redirect(http.StatusSeeOther, "/login")
@@ -276,16 +277,23 @@ func hasValidBrowserSession(c echo.Context, authSvc *service.AuthService) bool {
 	return authErr == nil
 }
 
-func sanitizeNextPath(raw string) string {
+func (ctrl AuthController) homePath() string {
+	if ctrl.HomePath == "" {
+		return "/workflows"
+	}
+	return ctrl.HomePath
+}
+
+func sanitizeNextPath(raw, fallback string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" || !strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, "//") {
-		return "/workflows"
+		return fallback
 	}
 	if strings.ContainsAny(trimmed, "\\\r\n\x00") {
-		return "/workflows"
+		return fallback
 	}
 	if strings.HasPrefix(trimmed, "/login") || strings.HasPrefix(trimmed, "/setup") || strings.HasPrefix(trimmed, "/logout") {
-		return "/workflows"
+		return fallback
 	}
 
 	return trimmed

@@ -21,6 +21,17 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.22.3'
+
+      - name: Validate embedded dashboard
+        run: |
+          npm ci --prefix web
+          npm test --prefix web
+          npm run build --prefix web
+          test -z "$(git status --porcelain -- internal/web/dashboard)"
+
       - name: Check Go formatting and vet
         run: |
           go fmt ./... && git diff --exit-code

@@ -167,8 +167,9 @@ func runServer(ctx context.Context, cfg config.Config) (runErr error) {
 
 	router := newBaseEcho(db)
 	router.GET("/metrics", echo.WrapHandler(metrics.Handler()), middleware.RequireAPIAuth(authSvc))
-	(web.AuthController{Service: authSvc}).Register(router)
+	webAuth := web.AuthController{Service: authSvc}
 	if operator != nil {
+		webAuth.HomePath = web.DashboardPath
 		registerClusterControllers(router, authSvc, workflowSvc, providerSvc, service.NewProviderManagement(operator.ProviderRepository), service.NewWorkflowDefinitions(operator.WorkflowDefinitions),
 			service.NewExecutions(operator.ExecutionRepository, operator.WorkflowDefinitions),
 			service.NewArtifacts(operator.ExecutionRepository, artifacts), operator.Schedules)
@@ -177,6 +178,7 @@ func runServer(ctx context.Context, cfg config.Config) (runErr error) {
 	} else {
 		registerStandaloneControllers(router, authSvc)
 	}
+	webAuth.Register(router)
 
 	server := &http.Server{
 		Addr:              cfg.Address,
@@ -209,6 +211,7 @@ func registerClusterControllers(
 		Artifacts:           artifacts,
 		Schedules:           schedules,
 	}).Register(e)
+	web.RegisterDashboard(e, auth)
 
 	(web.WorkflowController{
 		Auth:    auth,

@@ -833,6 +833,57 @@ if not csrf_match:
     raise RuntimeError('missing csrf_token in workflow form')
 csrf_token = csrf_match.group(1)
 
+with urllib.request.urlopen(base + '/', timeout=5) as response:
+    if urllib.parse.urlparse(response.url).path != '/login':
+        raise RuntimeError('unauthenticated dashboard must redirect to login')
+
+with browser.open(base + '/', timeout=5) as response:
+    dashboard = response.read().decode('utf-8')
+    if urllib.parse.urlparse(response.url).path != '/dashboard':
+        raise RuntimeError('authenticated root must redirect to the dashboard')
+    if response.headers.get('Cache-Control') != 'no-store' or not response.headers.get('Content-Security-Policy'):
+        raise RuntimeError('dashboard document must use no-store and enforce a content security policy')
+assets = re.findall(r'(?:src|href)="(/dashboard-static/assets/[^"]+)"', dashboard)
+asset_types = {'.js': 'text/javascript', '.css': 'text/css'}
+if {asset.rsplit('.', 1)[-1] for asset in assets} != {'js', 'css'}:
+    raise RuntimeError('dashboard document did not reference the embedded JavaScript and CSS assets')
+for asset in assets:
+    with browser.open(base + asset, timeout=5) as response:
+        if response.headers.get_content_type() != asset_types['.' + asset.rsplit('.', 1)[-1]]:
+            raise RuntimeError('dashboard asset has an incorrect content type')
+        if 'immutable' not in response.headers.get('Cache-Control', '') or not response.read():
+            raise RuntimeError('dashboard asset is empty or missing its immutable cache policy')
+
+with browser.open(base + '/login', timeout=5) as response:
+    if urllib.parse.urlparse(response.url).path != '/dashboard':
+        raise RuntimeError('signed-in login should return to the dashboard')
+
+with browser.open(base + '/api/v1/auth/me', timeout=5) as response:
+    user = json.load(response)
+    if user['username'] != 'admin' or user['csrfToken'] != csrf_token:
+        raise RuntimeError('dashboard API did not authenticate the browser cookie')
+operation = urllib.request.Request(
+    base + '/api/v1/auth/tokens',
+    data=b'{"name":"dashboard-e2e"}',
+    headers={'Content-Type': 'application/json', 'X-CSRF-Token': user['csrfToken']},
+    method='POST',
+)
+with browser.open(operation, timeout=5) as response:
+    issued = json.load(response)
+    if response.status != 201 or not issued.get('token'):
+        raise RuntimeError('dashboard cookie and CSRF token failed to authorize the API request')
+with browser.open(base + '/api/v1/auth/tokens', timeout=5) as response:
+    token = next(item for item in json.load(response) if item['name'] == 'dashboard-e2e')
+revoke = urllib.request.Request(
+    base + '/api/v1/auth/tokens/' + token['id'],
+    headers={'X-CSRF-Token': user['csrfToken']},
+    method='DELETE',
+)
+with browser.open(revoke, timeout=5) as response:
+    if response.status != 204:
+        raise RuntimeError('dashboard could not revoke the API token')
+print('Embedded dashboard, authenticated API and CSRF-protected actions verified')
+
 form_body = urllib.parse.urlencode({
     'prompt': 'UI mock workflow',
     'csrf_token': csrf_token,

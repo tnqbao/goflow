@@ -33,7 +33,7 @@ Forward the service port locally:
 kubectl -n kubereel port-forward service/kubereel-kubereel 8080:8080
 ```
 
-- **Web UI:** Open `http://localhost:8080`, complete the one-time **Initial Administrator Setup** (`/setup`), then run the built-in Mock workflow at `/workflows` and preview/download the rendered MP4.
+- **Web Dashboard:** Open `http://localhost:8080` and complete the one-time administrator setup. Use the dashboard to manage workflows and providers, inspect runs, download outputs, and manage API tokens. To render a sample MP4 with the built-in Mock provider, open **Workflows → Open Mock demo**.
 - **Health checks:** `http://localhost:8080/healthz` and `http://localhost:8080/readyz` (unauthenticated probes).
 - **API authentication & workflow test:**
 
@@ -137,6 +137,16 @@ CI/CD (`.github/workflows/pipeline.yml`) automatically runs `build` -> `test` ->
 ---
 
 ## Development & Validation
+
+After changing the dashboard source, regenerate the files embedded in the Go binary with Node.js 24:
+
+```sh
+npm ci --prefix web
+npm test --prefix web
+npm run build --prefix web
+```
+
+Commit the updated bundle in `internal/web/dashboard/` with the source changes.
 
 ```sh
 go fmt ./...

@@ -15,3 +15,6 @@ coverage.out
 /SPEC.md
 /AGENTS.md
 /context.txt
+
+# Frontend dependencies
+/web/node_modules/
