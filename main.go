@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/tnqbao/kubereel/internal/kubernetes"
 	"github.com/tnqbao/kubereel/internal/mock"
 	"github.com/tnqbao/kubereel/internal/provider"
+	"github.com/tnqbao/kubereel/internal/renderer"
 	"github.com/tnqbao/kubereel/internal/storage"
 	"github.com/tnqbao/kubereel/internal/web"
 	"github.com/tnqbao/kubereel/internal/workflow"
@@ -107,7 +109,15 @@ func runTask(ctx context.Context, command, inputPath, outputPath string, cfg con
 		return mock.Generate(ctx, artifacts, inputKey, outputKey)
 	}
 
-	return mock.Render(ctx, artifacts, inputKey, outputKey)
+	if isLegacySVGRender(inputKey, outputKey) {
+		return mock.Render(ctx, artifacts, inputKey, outputKey)
+	}
+
+	return renderer.New().RenderFile(ctx, artifacts, inputKey, outputKey)
+}
+
+func isLegacySVGRender(inputKey, outputKey string) bool {
+	return strings.HasSuffix(inputKey, ".svg") && strings.HasSuffix(outputKey, ".svg")
 }
 
 func runServer(ctx context.Context, cfg config.Config) (runErr error) {

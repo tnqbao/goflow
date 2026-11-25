@@ -1,5 +1,5 @@
 apiVersion: v2
-name: kubereel
+name: kubereel-chart
 description: A Kubernetes-native AI video production platform
 type: application
 version: 0.1.0

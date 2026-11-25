@@ -1,0 +1,158 @@
+name: Pipeline
+
+on:
+  push:
+    branches: [develop, main]
+    tags: ['v[0-9]*']
+  pull_request:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Check Go formatting and vet
+        run: |
+          go fmt ./... && git diff --exit-code
+          go vet ./...
+
+      - name: Build Go executable
+        run: |
+          go build ./...
+          rm -f kubereel
+
+      - name: Build Docker image
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          docker build -t "kubereel:${COMMIT_SHA}" .
+          docker save "kubereel:${COMMIT_SHA}" -o "${RUNNER_TEMP}/kubereel-image.tar"
+
+      - name: Upload Docker image artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kubereel-image
+          path: ${{ runner.temp }}/kubereel-image.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  test:
+    needs: [build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12.10'
+
+      - uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+        with:
+          version: v3.17.3
+
+      - uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
+        with:
+          version: v1.32.2
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install PyYAML==6.0.2
+          go install sigs.k8s.io/kind@v0.27.0
+
+      - name: Download Docker image artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: kubereel-image
+          path: ${{ runner.temp }}
+
+      - name: Load Docker image
+        run: docker load -i "${RUNNER_TEMP}/kubereel-image.tar"
+
+      - name: Run Go unit and race tests
+        run: go test -race ./...
+
+      - name: Validate Helm chart
+        run: |
+          helm lint ./charts/kubereel
+          helm template kubereel ./charts/kubereel > /dev/null
+          python charts/kubereel/tests/test_chart.py
+
+      - name: Run Docker smoke and Kind end-to-end tests
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: ./tests/e2e-kind.sh "kubereel:${COMMIT_SHA}"
+
+  push:
+    if: github.event_name == 'push'
+    needs: [test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download tested Docker image artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: kubereel-image
+          path: ${{ runner.temp }}
+
+      - name: Load Docker image
+        run: docker load -i "${RUNNER_TEMP}/kubereel-image.tar"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Tag and push image to Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+
+          if [ -z "$DOCKERHUB_USERNAME" ]; then
+            echo "DOCKERHUB_USERNAME secret is required" >&2
+            exit 1
+          fi
+
+          repo="${DOCKERHUB_REPOSITORY:-${DOCKERHUB_USERNAME}/kubereel}"
+          repo=$(printf '%s' "$repo" | tr '[:upper:]' '[:lower:]')
+          short_sha=$(printf '%.7s' "$COMMIT_SHA")
+          source_image="kubereel:${COMMIT_SHA}"
+
+          sha_tag="${repo}:sha-${short_sha}"
+          docker tag "$source_image" "$sha_tag"
+          docker push "$sha_tag"
+
+          if [ "$REF_TYPE" = "tag" ]; then
+            docker tag "$source_image" "${repo}:${REF_NAME}"
+            docker push "${repo}:${REF_NAME}"
+
+            clean_version="${REF_NAME#v}"
+            if [ "$clean_version" != "$REF_NAME" ]; then
+              docker tag "$source_image" "${repo}:${clean_version}"
+              docker push "${repo}:${clean_version}"
+            fi
+          else
+            safe_branch=$(printf '%s' "$REF_NAME" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/^-*//;s/-*$//')
+            docker tag "$source_image" "${repo}:${safe_branch}"
+            docker push "${repo}:${safe_branch}"
+          fi

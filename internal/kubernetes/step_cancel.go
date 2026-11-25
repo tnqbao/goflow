@@ -168,7 +168,7 @@ func (e *StepExecutor) cancelActiveStep(
 
 	if hasJobCondition(actualJob, batchv1.JobComplete) {
 		delete(entry, "deletionRequested")
-		return e.recordStepSuccess(ctx, run, status, statuses, entry, expectedJob, false)
+		return e.recordStepSuccess(ctx, run, status, statuses, step, entry, expectedJob, false)
 	}
 
 	if hasJobCondition(actualJob, batchv1.JobFailed) {
@@ -188,7 +188,7 @@ func (e *StepExecutor) verifyStepForCancellation(
 	step executableStep,
 	entry map[string]interface{},
 ) (*batchv1.Job, string, error) {
-	if !isSupportedMockImageStep(step) {
+	if !isSupportedExecutableStep(step) {
 		return nil, "cannot verify the running step", nil
 	}
 
@@ -205,7 +205,7 @@ func (e *StepExecutor) verifyStepForCancellation(
 		return nil, "recorded Job configuration is invalid", nil
 	}
 
-	expectedJob, err := StepJob(run.GetName(), run.GetUID(), step.Name, attempt, jobCfg)
+	expectedJob, err := stepJobForStep(run.GetName(), run.GetUID(), step, attempt, jobCfg)
 	if err != nil {
 		return nil, "", err
 	}

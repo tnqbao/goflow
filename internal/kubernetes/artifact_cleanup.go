@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"path"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -89,7 +88,7 @@ func (e *StepExecutor) collectAllowedRunArtifacts(run *unstructured.Unstructured
 			return nil, err
 		}
 
-		job, err := StepJob(run.GetName(), run.GetUID(), step.Name, attempt, jobCfg)
+		job, err := stepJobForStep(run.GetName(), run.GetUID(), step, attempt, jobCfg)
 		if err != nil {
 			return nil, err
 		}
@@ -98,7 +97,7 @@ func (e *StepExecutor) collectAllowedRunArtifacts(run *unstructured.Unstructured
 			return nil, fmt.Errorf("step %q has invalid job identity", step.Name)
 		}
 
-		artifactKey := path.Join("workflows", job.Labels["kubereel.io/workflow"], "scene.svg")
+		artifactKey := stepOutputArtifactKey(step, job.Labels["kubereel.io/workflow"])
 		allowed[artifactKey] = true
 	}
 

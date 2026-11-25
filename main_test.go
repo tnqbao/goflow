@@ -171,6 +171,50 @@ func TestWorkerAndRenderCommands(t *testing.T) {
 	}
 }
 
+func TestRenderCommandFFmpegSpec(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Defaults()
+	cfg.Database = filepath.Join(dir, "kubereel.db")
+
+	badSpecPath := filepath.Join(dir, "bad.json")
+	outPath := filepath.Join(dir, "out.mp4")
+	if err := os.WriteFile(badSpecPath, []byte(`{"operation":"shell","inputs":["a.mp4"]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := executeCommand(context.Background(), []string{"render", "--input", badSpecPath, "--output", outPath}, cfg); err == nil {
+		t.Fatal("render accepted an unsupported operation")
+	}
+
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		return
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		return
+	}
+
+	sourceClip := filepath.Join(dir, "clip.mp4")
+	gen := exec.Command("ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=320x240:r=10:d=1", "-an", "-c:v", "mpeg4", sourceClip)
+	if out, err := gen.CombinedOutput(); err != nil {
+		t.Fatalf("create test clip: %v\n%s", err, out)
+	}
+
+	specPath := filepath.Join(dir, "render.json")
+	specJSON := `{"operation":"resize","inputs":["clip.mp4"],"width":640,"height":360}`
+	if err := os.WriteFile(specPath, []byte(specJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := executeCommand(context.Background(), []string{"render", "--input", specPath, "--output", outPath}, cfg); err != nil {
+		t.Fatalf("executeCommand render: %v", err)
+	}
+
+	info, err := os.Stat(outPath)
+	if err != nil || info.Size() == 0 {
+		t.Fatalf("rendered MP4 stat = %v, %v", info, err)
+	}
+}
+
 func TestSingleExecutableCommands(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "kubereel")

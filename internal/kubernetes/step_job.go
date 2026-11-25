@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -136,8 +137,40 @@ func buildJobConfigFromSaved(saved savedJobConfig) (JobConfig, error) {
 	return cfg, nil
 }
 
-// StepJob builds a deterministic Mock image Job owned by a VideoRun.
+// StepJob builds a deterministic worker Job owned by a VideoRun.
 func StepJob(runName string, uid types.UID, stepName string, attempt int64, cfg JobConfig) (*batchv1.Job, error) {
+	return buildOwnedStepJob(runName, uid, stepName, attempt, StageWorker, "request.json", "scene.svg", cfg)
+}
+
+// StepRenderJob builds a deterministic FFmpeg render Job owned by a VideoRun.
+func StepRenderJob(runName string, uid types.UID, stepName string, attempt int64, cfg JobConfig) (*batchv1.Job, error) {
+	return buildOwnedStepJob(runName, uid, stepName, attempt, StageRender, "render.json", "output.mp4", cfg)
+}
+
+func stepJobForStep(runName string, uid types.UID, step executableStep, attempt int64, cfg JobConfig) (*batchv1.Job, error) {
+	if step.Type == "ffmpeg" {
+		return StepRenderJob(runName, uid, step.Name, attempt, cfg)
+	}
+
+	return StepJob(runName, uid, step.Name, attempt, cfg)
+}
+
+func stepOutputArtifactKey(step executableStep, workflowID string) string {
+	if step.Type == "ffmpeg" {
+		return path.Join("workflows", workflowID, "output.mp4")
+	}
+
+	return path.Join("workflows", workflowID, "scene.svg")
+}
+
+func buildOwnedStepJob(
+	runName string,
+	uid types.UID,
+	stepName string,
+	attempt int64,
+	stage, inputFile, outputFile string,
+	cfg JobConfig,
+) (*batchv1.Job, error) {
 	if runName == "" || uid == "" || stepName == "" {
 		return nil, fmt.Errorf("run name, UID and step name are required")
 	}
@@ -147,8 +180,9 @@ func StepJob(runName string, uid types.UID, stepName string, attempt int64, cfg 
 	}
 
 	workflowID := deterministicStepID(uid, stepName, attempt)
+	workflowDir := path.Join(dataMountPath, "workflows", workflowID)
 
-	job, err := Job(workflowID, StageWorker, cfg)
+	job, err := jobWithPaths(workflowID, stage, path.Join(workflowDir, inputFile), path.Join(workflowDir, outputFile), cfg)
 	if err != nil {
 		return nil, err
 	}

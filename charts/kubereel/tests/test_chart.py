@@ -36,6 +36,12 @@ class ChartTest(unittest.TestCase):
         self.assertTrue(version["served"] and version["storage"])
         spec = version["schema"]["openAPIV3Schema"]["properties"]["spec"]
         self.assertEqual(set(spec["properties"]), {"description", "inputs", "steps", "outputs"})
+        step_schema = spec["properties"]["steps"]["items"]
+        self.assertIn("ffmpeg", step_schema["properties"])
+        self.assertEqual(
+            set(step_schema["properties"]["ffmpeg"]["properties"]["operation"]["enum"]),
+            {"merge", "trim", "resize", "aspect_ratio", "add_audio", "normalize", "render_mp4"},
+        )
 
     def test_video_run_crd(self):
         docs = render("--include-crds")
@@ -77,7 +83,7 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(env["EXECUTION_MODE"], "kubernetes")
         self.assertEqual(env["MAX_CONCURRENT_JOBS"], "5")
         self.assertEqual(env["JOB_TTL_SECONDS"], "86400")
-        self.assertEqual(container["image"], "kubereel:0.1.0")
+        self.assertEqual(container["image"], "iamqbao/kubereel:0.1.0")
         self.assertEqual(env["JOB_IMAGE"], container["image"])
         self.assertEqual(env["SHARED_STORAGE"], "false")
         self.assertEqual(env["PVC_NAME"], docs["PersistentVolumeClaim"]["metadata"]["name"])

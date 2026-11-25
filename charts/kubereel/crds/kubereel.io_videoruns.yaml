@@ -124,6 +124,11 @@ spec:
                       required:
                       - name
                       - type
+                      x-kubernetes-validations:
+                      - rule: "!has(self.ffmpeg) || self.type == 'ffmpeg'"
+                        message: ffmpeg configuration is only valid for ffmpeg steps
+                      - rule: "self.type != 'ffmpeg' || (has(self.ffmpeg) && !has(self.providerRef))"
+                        message: ffmpeg steps require an ffmpeg configuration and must not set providerRef
                       properties:
                         name:
                           type: string
@@ -150,6 +155,61 @@ spec:
                           type: string
                           minLength: 1
                           maxLength: 253
+                        ffmpeg:
+                          type: object
+                          required:
+                          - operation
+                          properties:
+                            operation:
+                              type: string
+                              enum:
+                              - merge
+                              - trim
+                              - resize
+                              - aspect_ratio
+                              - add_audio
+                              - normalize
+                              - render_mp4
+                            inputs:
+                              type: array
+                              minItems: 1
+                              maxItems: 32
+                              items:
+                                type: string
+                                minLength: 1
+                                maxLength: 253
+                            audioInput:
+                              type: string
+                              minLength: 1
+                              maxLength: 253
+                            width:
+                              type: integer
+                              minimum: 16
+                              maximum: 3840
+                            height:
+                              type: integer
+                              minimum: 16
+                              maximum: 3840
+                            aspectRatio:
+                              type: string
+                              enum:
+                              - "16:9"
+                              - "9:16"
+                              - "1:1"
+                              - "4:3"
+                              - "4:5"
+                            startSeconds:
+                              type: number
+                              minimum: 0
+                              maximum: 86400
+                            durationSeconds:
+                              type: number
+                              minimum: 0.1
+                              maximum: 86400
+                            fps:
+                              type: integer
+                              minimum: 1
+                              maximum: 60
                         retry:
                           type: object
                           properties:
