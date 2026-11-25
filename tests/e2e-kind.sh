@@ -6,6 +6,7 @@ for tool in kind docker helm kubectl python3; do
   command -v "$tool" >/dev/null || { printf 'missing tool: %s\n' "$tool" >&2; exit 1; }
 done
 
+prebuilt_image=${1:-}
 workdir=$(mktemp -d /tmp/kubereel-e2e.XXXXXX)
 suffix=$(basename "$workdir" | cut -d. -f2 | tr '[:upper:]' '[:lower:]')
 cluster="kr-e2e-$suffix"
@@ -42,7 +43,11 @@ if docker image inspect "$image" >/dev/null 2>&1; then
   exit 1
 fi
 
-docker build -t "$image" .
+if [ -n "$prebuilt_image" ]; then
+  docker tag "$prebuilt_image" "$image"
+else
+  docker build -t "$image" .
+fi
 image_owned=1
 ./tests/docker-smoke.sh "$image"
 cluster_owned=1
