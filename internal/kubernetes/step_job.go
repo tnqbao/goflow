@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -11,6 +12,7 @@ import (
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -28,6 +30,46 @@ func activeVideoJobs(ctx context.Context, jobs Jobs, instance string) (int, erro
 		count++
 	}
 	return count, nil
+}
+
+func jobConfigStatus(cfg JobConfig, job *batchv1.Job) map[string]interface{} {
+	return map[string]interface{}{
+		"image": cfg.Image, "claim": cfg.Claim, "instance": cfg.Instance,
+		"sharedStorage": cfg.SharedStorage, "pullPolicy": string(job.Spec.Template.Spec.Containers[0].ImagePullPolicy),
+		"ttlSeconds": int64(*job.Spec.TTLSecondsAfterFinished),
+	}
+}
+
+func recordedJobConfig(entry map[string]interface{}, fallback JobConfig) (JobConfig, error) {
+	stored, found, err := unstructured.NestedMap(entry, "jobConfig")
+	if err != nil {
+		return JobConfig{}, fmt.Errorf("read recorded Job configuration: %w", err)
+	}
+	if !found {
+		return fallback, nil
+	}
+	data, err := json.Marshal(stored)
+	if err != nil {
+		return JobConfig{}, fmt.Errorf("encode recorded Job configuration: %w", err)
+	}
+	var saved struct {
+		Image         string            `json:"image"`
+		Claim         string            `json:"claim"`
+		Instance      string            `json:"instance"`
+		SharedStorage *bool             `json:"sharedStorage"`
+		PullPolicy    corev1.PullPolicy `json:"pullPolicy"`
+		TTLSeconds    *int32            `json:"ttlSeconds"`
+	}
+	if err := json.Unmarshal(data, &saved); err != nil {
+		return JobConfig{}, fmt.Errorf("decode recorded Job configuration: %w", err)
+	}
+	if saved.Image == "" || saved.Claim == "" || saved.Instance == "" || saved.SharedStorage == nil || saved.TTLSeconds == nil {
+		return JobConfig{}, fmt.Errorf("recorded Job configuration is incomplete")
+	}
+	if *saved.TTLSeconds < 0 || (saved.PullPolicy != corev1.PullAlways && saved.PullPolicy != corev1.PullIfNotPresent && saved.PullPolicy != corev1.PullNever) {
+		return JobConfig{}, fmt.Errorf("recorded Job configuration is invalid")
+	}
+	return JobConfig{Image: saved.Image, Claim: saved.Claim, Instance: saved.Instance, SharedStorage: *saved.SharedStorage, PullPolicy: saved.PullPolicy, TTLSecondsAfterFinished: saved.TTLSeconds}, nil
 }
 
 // StepJob builds a deterministic Mock image Job owned by a VideoRun.

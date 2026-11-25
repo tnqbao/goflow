@@ -255,6 +255,16 @@ spec:
                     jobName:
                       type: string
                       maxLength: 253
+                    jobConfig:
+                      type: object
+                      required: [image, claim, instance, sharedStorage, pullPolicy, ttlSeconds]
+                      properties:
+                        image: {type: string, minLength: 1, maxLength: 2048}
+                        claim: {type: string, minLength: 1, maxLength: 253}
+                        instance: {type: string, minLength: 1, maxLength: 63}
+                        sharedStorage: {type: boolean}
+                        pullPolicy: {type: string, enum: [Always, IfNotPresent, Never]}
+                        ttlSeconds: {type: integer, minimum: 0, maximum: 2147483647}
                     providerRequestID:
                       type: string
                       maxLength: 1024

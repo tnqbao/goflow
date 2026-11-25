@@ -39,6 +39,8 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(version["name"], "v1alpha1")
         self.assertEqual(version["subresources"], {"status": {}})
         schema = version["schema"]["openAPIV3Schema"]["properties"]
+        job_config = schema["status"]["properties"]["steps"]["items"]["properties"]["jobConfig"]
+        self.assertEqual(set(job_config["required"]), {"image", "claim", "instance", "sharedStorage", "pullPolicy", "ttlSeconds"})
         self.assertEqual(set(schema["spec"]["required"]), {"workflowRef", "workflowSnapshot"})
         self.assertEqual(schema["spec"]["x-kubernetes-validations"][0]["message"], "run inputs are immutable")
         snapshot = dict(schema["spec"]["properties"]["workflowSnapshot"])

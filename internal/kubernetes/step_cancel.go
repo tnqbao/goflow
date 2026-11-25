@@ -113,7 +113,11 @@ func (e *StepExecutor) cancelStep(ctx context.Context, run *unstructured.Unstruc
 	if attempt == 0 {
 		return e.cancelReview(ctx, run, status, statuses, entry, "recorded attempt is missing")
 	}
-	expected, err := StepJob(run.GetName(), run.GetUID(), step.Name, attempt, e.Config)
+	config, err := recordedJobConfig(entry, e.Config)
+	if err != nil {
+		return e.cancelReview(ctx, run, status, statuses, entry, "recorded Job configuration is invalid")
+	}
+	expected, err := StepJob(run.GetName(), run.GetUID(), step.Name, attempt, config)
 	if err != nil {
 		return err
 	}

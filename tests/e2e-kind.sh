@@ -307,6 +307,80 @@ if [ -n "$(kubectl --kubeconfig "$kubeconfig" -n kubereel-test get job "$cancel_
   printf 'cancelled Job still exists\n' >&2
   exit 1
 fi
+cat >"$workdir/recovery-runs.yaml" <<'YAML'
+apiVersion: kubereel.io/v1alpha1
+kind: VideoRun
+metadata: {name: recover-existing, namespace: kubereel-test}
+spec:
+  workflowRef: sample
+  workflowSnapshot:
+    steps:
+      - name: image
+        type: image
+        providerRef: mock
+        resources:
+          requests: {cpu: "1000000", memory: 128Mi}
+          limits: {cpu: "1000000", memory: 512Mi}
+  inputs:
+    prompt: {stringValue: "Recover existing Job"}
+---
+apiVersion: kubereel.io/v1alpha1
+kind: VideoRun
+metadata: {name: recover-missing, namespace: kubereel-test}
+spec:
+  workflowRef: sample
+  workflowSnapshot:
+    steps:
+      - name: image
+        type: image
+        providerRef: mock
+        resources:
+          requests: {cpu: "1000000", memory: 128Mi}
+          limits: {cpu: "1000000", memory: 512Mi}
+  inputs:
+    prompt: {stringValue: "Recover missing Job"}
+YAML
+kubectl --kubeconfig "$kubeconfig" apply -f "$workdir/recovery-runs.yaml"
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test wait --for=jsonpath='{.status.phase}'=Running videorun/recover-existing videorun/recover-missing --timeout=60s
+existing_uid=$(kubectl --kubeconfig "$kubeconfig" -n kubereel-test get videorun recover-existing -o jsonpath='{.metadata.uid}')
+missing_uid=$(kubectl --kubeconfig "$kubeconfig" -n kubereel-test get videorun recover-missing -o jsonpath='{.metadata.uid}')
+python3 - "$kubeconfig" "$existing_uid" "$missing_uid" "$workdir/recovery-jobs" <<'PY'
+import selectors, subprocess, sys
+
+names = []
+for uid in sys.argv[2:4]:
+    command = ["kubectl", "--kubeconfig", sys.argv[1], "-n", "kubereel-test", "get", "jobs", "-l", "kubereel.io/videorun=" + uid, "--watch", "-o", "name"]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    try:
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
+        if not selector.select(timeout=60):
+            raise RuntimeError("timed out waiting for recovery Job")
+        name = process.stdout.readline().strip()
+        if not name:
+            raise RuntimeError("Job watch ended without a Job")
+        names.append(name)
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+with open(sys.argv[4], "w", encoding="utf-8") as output:
+    output.write("\n".join(names))
+PY
+existing_job=$(sed -n '1p' "$workdir/recovery-jobs")
+missing_job=$(sed -n '2p' "$workdir/recovery-jobs")
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test scale deployment/kubereel-kubereel --replicas=0
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test wait --for=delete pod -l kubereel.io/control-plane=kubereel --timeout=90s
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test patch "$existing_job" --subresource=status --type=merge -p '{"status":{"active":0,"failed":1,"conditions":[{"type":"FailureTarget","status":"True","reason":"SimulatedFailure"},{"type":"Failed","status":"True","reason":"SimulatedFailure"}]}}'
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test delete "$missing_job" --cascade=foreground --wait=true --timeout=90s
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test set env deployment/kubereel-kubereel KUBEREEL_JOB_TTL_SECONDS=7200
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test scale deployment/kubereel-kubereel --replicas=1
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test rollout status deployment/kubereel-kubereel --timeout=120s
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test wait --for=jsonpath='{.status.phase}'=Failed videorun/recover-existing --timeout=60s
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test wait --for=jsonpath='{.status.phase}'=RequiresReview videorun/recover-missing --timeout=60s
+if [ -n "$(kubectl --kubeconfig "$kubeconfig" -n kubereel-test get jobs -l "kubereel.io/videorun=$missing_uid" -o name)" ]; then
+  printf 'missing Job was unexpectedly resubmitted\n' >&2
+  exit 1
+fi
 kubectl --kubeconfig "$kubeconfig" -n kubereel-test port-forward --address 127.0.0.1 service/kubereel-kubereel :8080 >"$workdir/forward.log" 2>&1 &
 forward_pid=$!
 port=""

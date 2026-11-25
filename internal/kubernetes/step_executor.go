@@ -170,7 +170,15 @@ func (e *StepExecutor) submit(ctx context.Context, run *unstructured.Unstructure
 	if attempt >= attemptLimit(step) {
 		return e.mark(ctx, run, status, statuses, entry, "Failed", "step retry limit exhausted")
 	}
-	job, err := StepJob(run.GetName(), run.GetUID(), step.Name, attempt+1, e.Config)
+	_, recorded := entry["jobConfig"]
+	if attempt > 0 && !recorded {
+		return e.mark(ctx, run, status, statuses, entry, "RequiresReview", "retry has no recorded Job configuration")
+	}
+	config, err := recordedJobConfig(entry, e.Config)
+	if err != nil {
+		return e.mark(ctx, run, status, statuses, entry, "RequiresReview", "recorded Job configuration is invalid")
+	}
+	job, err := StepJob(run.GetName(), run.GetUID(), step.Name, attempt+1, config)
 	if err != nil {
 		return err
 	}
@@ -191,6 +199,7 @@ func (e *StepExecutor) submit(ctx context.Context, run *unstructured.Unstructure
 	entry["phase"] = "Running"
 	entry["ready"] = false
 	entry["jobName"] = job.Name
+	entry["jobConfig"] = jobConfigStatus(config, job)
 	entry["attempts"] = attempt + 1
 	delete(entry, "error")
 	status["phase"] = "Running"
@@ -212,7 +221,11 @@ func (e *StepExecutor) observe(ctx context.Context, run *unstructured.Unstructur
 	if attempt == 0 {
 		return true, e.mark(ctx, run, status, statuses, entry, "RequiresReview", "recorded attempt is missing")
 	}
-	expected, err := StepJob(run.GetName(), run.GetUID(), step.Name, attempt, e.Config)
+	config, err := recordedJobConfig(entry, e.Config)
+	if err != nil {
+		return true, e.mark(ctx, run, status, statuses, entry, "RequiresReview", "recorded Job configuration is invalid")
+	}
+	expected, err := StepJob(run.GetName(), run.GetUID(), step.Name, attempt, config)
 	if err != nil {
 		return false, err
 	}
@@ -233,6 +246,7 @@ func (e *StepExecutor) observe(ctx context.Context, run *unstructured.Unstructur
 		return true, e.mark(ctx, run, status, statuses, entry, "RequiresReview", err.Error())
 	}
 	if finished(job, batchv1.JobFailed) {
+		entry["jobConfig"] = jobConfigStatus(config, expected)
 		return true, e.retryOrFail(ctx, run, status, statuses, step, entry, attempt)
 	}
 	if !finished(job, batchv1.JobComplete) {
