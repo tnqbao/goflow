@@ -15,6 +15,7 @@ import (
 
 	"github.com/tnqbao/kubereel/internal/mock"
 	"github.com/tnqbao/kubereel/internal/renderer"
+	"github.com/tnqbao/kubereel/internal/repository"
 	"github.com/tnqbao/kubereel/internal/service"
 	"github.com/tnqbao/kubereel/internal/storage"
 	"github.com/tnqbao/kubereel/internal/workflow"
@@ -37,13 +38,14 @@ type Jobs interface {
 
 // Controller reconciles durable workflow executions and runs the VideoRun controller.
 type Controller struct {
-	Workflows     *service.WorkflowService
-	Jobs          Jobs
-	Config        JobConfig
-	Artifacts     storage.Store
-	MaxConcurrent int
-	VideoRuns     *VideoRunController
-	JobLock       *sync.Mutex
+	ProviderRepository *repository.ProviderRepository
+	Workflows          *service.WorkflowService
+	Jobs               Jobs
+	Config             JobConfig
+	Artifacts          storage.Store
+	MaxConcurrent      int
+	VideoRuns          *VideoRunController
+	JobLock            *sync.Mutex
 }
 
 // Run reconciles durable workflow state until ctx is cancelled.

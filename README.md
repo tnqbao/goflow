@@ -158,3 +158,13 @@ python3 charts/kubereel/tests/test_chart.py
 - Official **Google Gemini** (`gemini-4-hydrogen` default via the Interactions API) is supported for `llm` steps and official **fal.ai** (via `https://queue.fal.run`) is supported for `image`, text-to-video, and image-to-video steps using `VideoProvider` resources and Kubernetes `Secret` (`secretRef`) credentials — API keys are injected directly into worker Job pods via `secretKeyRef`, endpoints enforce HTTPS + SSRF protection, `429` rate limits honor `Retry-After` with bounded backoff, and uncertain billable submissions transition to `RequiresReview` without automatic retry.
 - Built-in **Authentication** protects the Web Dashboard, management REST APIs, and artifact downloads with one-time initial administrator setup (`/setup` & `/api/v1/auth/setup`), `bcrypt` password hashing, `HttpOnly`/`SameSite=Lax` browser sessions with CSRF protection, SHA-256-hashed personal Bearer API tokens (`/api/v1/auth/tokens`), and per-IP login rate limiting.
 - The `/api/v1` provider, workflow, execution, and artifact management endpoints are in active development.
+
+### Provider management
+
+The [Provider API](docs/provider-api.yaml) runs in Kubernetes mode. Use an administrator Bearer token or a signed-in browser session with a CSRF token for writes. Complete the initial administrator setup over a trusted connection before exposing an ingress.
+
+Create a provider with its Kubernetes name, type and supported capabilities. Gemini and fal also require an API key on creation. Keys go into namespace-scoped Kubernetes Secrets and cannot be retrieved through the API. PATCH accepts a new key for rotation and `enabled: false` to prevent new step submissions. Existing Jobs can still reference the previous Secret version, which is retained until provider deletion. Deleting a provider can affect pending Jobs and retries that reference it, so let them finish before deletion.
+
+The API accepts official provider endpoints for writes. The built-in Mock remains available without configuration, and the versioned list returns persisted VideoProvider resources. The connectivity check validates local Mock configuration or calls the [Gemini model catalog](https://ai.google.dev/api/models) or [fal model pricing API](https://fal.ai/docs/documentation/model-apis/pricing) without submitting generation. fal checks the first configured model. A successful metadata check does not establish access to paid generation.
+
+For an existing Helm installation, apply the updated CRD before upgrading the chart so Kubernetes preserves the enabled setting.

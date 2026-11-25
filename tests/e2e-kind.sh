@@ -550,6 +550,32 @@ except urllib.error.HTTPError as error:
 else:
     raise RuntimeError('duplicate setup succeeded')
 
+# Verify versioned provider management against real Kubernetes RBAC and CRD validation.
+def provider_request(method, path='', payload=None, expected=200):
+    data = None if payload is None else json.dumps(payload).encode()
+    request = urllib.request.Request(
+        base + '/api/v1/providers' + path, data=data, method=method,
+        headers={**auth_headers, 'Content-Type': 'application/json'},
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        assert response.status == expected
+        body = response.read()
+    assert b'e2e-fake-provider-key' not in body and b'secretRef' not in body
+    return json.loads(body) if body else None
+
+provider_request('POST', payload={'id': 'managed-mock', 'type': 'mock', 'capabilities': ['image']}, expected=201)
+assert provider_request('POST', '/managed-mock/test')['check'] == 'local_configuration'
+assert provider_request('PATCH', '/managed-mock', {'enabled': False})['enabled'] is False
+assert provider_request('GET', '/managed-mock')['type'] == 'mock'
+assert len(provider_request('GET', '?limit=1')['items']) == 1
+provider_request('DELETE', '/managed-mock', expected=204)
+provider_request('POST', payload={
+    'id': 'managed-gemini', 'type': 'gemini', 'capabilities': ['text'],
+    'apiKey': 'e2e-fake-provider-key',
+}, expected=201)
+assert provider_request('PATCH', '/managed-gemini', {'apiKey': 'e2e-fake-provider-key-rotated'})['credentialsReferenced']
+provider_request('DELETE', '/managed-gemini', expected=204)
+
 # 3. Verify authenticated API workflow execution and protected MP4 artifact download.
 providers_req = urllib.request.Request(base + '/api/providers', headers=auth_headers)
 with urllib.request.urlopen(providers_req, timeout=5) as response:

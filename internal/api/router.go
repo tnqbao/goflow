@@ -10,9 +10,10 @@ import (
 
 // Router groups the application services required by HTTP API controllers.
 type Router struct {
-	Auth      *service.AuthService
-	Workflows *service.WorkflowService
-	Providers *service.ProviderService
+	Auth               *service.AuthService
+	Workflows          *service.WorkflowService
+	Providers          *service.ProviderService
+	ProviderManagement *service.ProviderManagement
 }
 
 // Register mounts auth and protected management/artifact API controllers onto e.
@@ -20,6 +21,6 @@ func (r Router) Register(e *echo.Echo) {
 	(controller.AuthController{Service: r.Auth}).Register(e)
 
 	authGuard := middleware.RequireAPIAuth(r.Auth)
-	(controller.ProviderController{Service: r.Providers}).Register(e, authGuard)
+	(controller.ProviderController{Service: r.Providers, Management: r.ProviderManagement}).Register(e, authGuard)
 	(controller.WorkflowController{Service: r.Workflows}).Register(e, authGuard)
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tnqbao/kubereel/internal/config"
+	"github.com/tnqbao/kubereel/internal/repository"
 	"github.com/tnqbao/kubereel/internal/service"
 	"github.com/tnqbao/kubereel/internal/storage"
 	corev1 "k8s.io/api/core/v1"
@@ -66,12 +67,13 @@ func NewControllerFromCluster(
 	}
 
 	return &Controller{
-		Workflows:     workflows,
-		Jobs:          clients.jobs,
-		Config:        jobCfg,
-		Artifacts:     artifacts,
-		MaxConcurrent: cfg.Kubernetes.MaxConcurrentJobs,
-		JobLock:       jobLock,
+		ProviderRepository: repository.NewProviderRepository(clients.providers, clients.core.Secrets(cfg.Kubernetes.Namespace)),
+		Workflows:          workflows,
+		Jobs:               clients.jobs,
+		Config:             jobCfg,
+		Artifacts:          artifacts,
+		MaxConcurrent:      cfg.Kubernetes.MaxConcurrentJobs,
+		JobLock:            jobLock,
 		VideoRuns: &VideoRunController{
 			Runs:     clients.runs,
 			Executor: executor,

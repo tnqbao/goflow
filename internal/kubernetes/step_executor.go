@@ -211,11 +211,7 @@ func (e *StepExecutor) prepareStepPlan(
 	}
 
 	if step.ProviderRef == "mock" {
-		payload, marshalErr := json.Marshal(mock.Request{Type: step.Type, Prompt: prompt})
-		if marshalErr != nil {
-			return stepExecutionPlan{}, false, "", fmt.Errorf("encode mock request: %w", marshalErr)
-		}
-		return stepExecutionPlan{payload: payload, inputFile: "request.json", jobOverride: e.Config}, false, "", nil
+		return e.buildMockStepPlan(step, prompt)
 	}
 
 	return e.prepareExternalProviderPlan(ctx, run.GetUID(), step, prompt, stepsByName, statusesByName)
@@ -237,6 +233,14 @@ func (e *StepExecutor) prepareExternalProviderPlan(
 		return stepExecutionPlan{}, false, "", fmt.Errorf("get VideoProvider %q: %w", step.ProviderRef, err)
 	}
 
+	enabled, configured, err := unstructured.NestedBool(vp.Object, "spec", "enabled")
+	if err != nil {
+		return stepExecutionPlan{}, false, "", err
+	}
+	if configured && !enabled {
+		return stepExecutionPlan{}, false, "provider is disabled", nil
+	}
+
 	providerType, _, err := unstructured.NestedString(vp.Object, "spec", "type")
 	if err != nil {
 		return stepExecutionPlan{}, false, "", err
@@ -244,11 +248,19 @@ func (e *StepExecutor) prepareExternalProviderPlan(
 
 	switch providerType {
 	case "mock":
-		payload, marshalErr := json.Marshal(mock.Request{Type: step.Type, Prompt: prompt})
-		if marshalErr != nil {
-			return stepExecutionPlan{}, false, "", fmt.Errorf("encode mock request: %w", marshalErr)
+		capability := step.Type
+		if capability == mock.StepLLM {
+			capability = "text"
 		}
-		return stepExecutionPlan{payload: payload, inputFile: "request.json", jobOverride: e.Config}, false, "", nil
+		capabilities, _, err := unstructured.NestedStringSlice(vp.Object, "spec", "capabilities")
+		if err != nil {
+			return stepExecutionPlan{}, false, "", err
+		}
+		if !slices.Contains(capabilities, capability) {
+			return stepExecutionPlan{}, false, "provider does not declare the required capability", nil
+		}
+		return e.buildMockStepPlan(step, prompt)
+
 	case executor.ProviderGemini:
 		if step.Type != mock.StepLLM {
 			return stepExecutionPlan{}, false, fmt.Sprintf("provider type %q is not supported for %s steps", providerType, step.Type), nil
@@ -262,6 +274,14 @@ func (e *StepExecutor) prepareExternalProviderPlan(
 	default:
 		return stepExecutionPlan{}, false, fmt.Sprintf("provider type %q is not supported for %s steps", providerType, step.Type), nil
 	}
+}
+
+func (e *StepExecutor) buildMockStepPlan(step executableStep, prompt string) (stepExecutionPlan, bool, string, error) {
+	payload, err := json.Marshal(mock.Request{Type: step.Type, Prompt: prompt})
+	if err != nil {
+		return stepExecutionPlan{}, false, "", fmt.Errorf("encode mock request: %w", err)
+	}
+	return stepExecutionPlan{payload: payload, inputFile: "request.json", jobOverride: e.Config}, false, "", nil
 }
 
 func (e *StepExecutor) buildGeminiStepPlan(

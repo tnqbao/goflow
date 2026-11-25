@@ -67,7 +67,7 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(version["name"], "v1alpha1")
         self.assertTrue(version["served"] and version["storage"])
         spec = version["schema"]["openAPIV3Schema"]["properties"]["spec"]
-        self.assertEqual(set(spec["properties"]), {"type", "capabilities", "models", "baseURL", "secretRef", "maxConcurrent", "timeoutSeconds"})
+        self.assertEqual(set(spec["properties"]), {"type", "enabled", "capabilities", "models", "baseURL", "secretRef", "maxConcurrent", "timeoutSeconds"})
         self.assertEqual(set(spec["properties"]["secretRef"]["required"]), {"name", "key"})
 
     def test_defaults(self):
