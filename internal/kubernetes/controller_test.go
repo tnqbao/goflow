@@ -20,8 +20,9 @@ import (
 )
 
 type testJobs struct {
-	jobs   map[string]*batchv1.Job
-	denied bool
+	jobs           map[string]*batchv1.Job
+	denied         bool
+	deletePolicies []metav1.DeletionPropagation
 }
 
 func (j *testJobs) List(_ context.Context, options metav1.ListOptions) (*batchv1.JobList, error) {
@@ -59,9 +60,12 @@ func (j *testJobs) Get(_ context.Context, name string, _ metav1.GetOptions) (*ba
 	}
 	return job.DeepCopy(), nil
 }
-func (j *testJobs) Delete(_ context.Context, name string, _ metav1.DeleteOptions) error {
+func (j *testJobs) Delete(_ context.Context, name string, options metav1.DeleteOptions) error {
 	if _, ok := j.jobs[name]; !ok {
 		return apierrors.NewNotFound(schema.GroupResource{Resource: "jobs"}, name)
+	}
+	if options.PropagationPolicy != nil {
+		j.deletePolicies = append(j.deletePolicies, *options.PropagationPolicy)
 	}
 	delete(j.jobs, name)
 	return nil

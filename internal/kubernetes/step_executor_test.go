@@ -131,7 +131,7 @@ func TestStepExecutorAccountsForLegacyWork(t *testing.T) {
 
 func TestStepJobConfigurationAndIdentity(t *testing.T) {
 	cfg := JobConfig{Image: "example/kubereel:v1", Claim: "data", Instance: "test"}
-	job, err := StepJob("run", types.UID("12345678-1234-1234-1234-123456789abc"), "step", cfg)
+	job, err := StepJob("run", types.UID("12345678-1234-1234-1234-123456789abc"), "step", 1, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestStepExecutorRejectsMissingPrompt(t *testing.T) {
 func TestLegacyControllerAccountsForVideoRunJobs(t *testing.T) {
 	ctx := context.Background()
 	controller, jobs := testController(t)
-	job, err := StepJob("run", types.UID("12345678-1234-1234-1234-123456789abc"), "image", controller.Config)
+	job, err := StepJob("run", types.UID("12345678-1234-1234-1234-123456789abc"), "image", 1, controller.Config)
 	if err != nil {
 		t.Fatal(err)
 	}

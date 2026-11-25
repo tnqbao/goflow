@@ -140,12 +140,18 @@ func (c *VideoRunController) Reconcile(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
+	if cancelled && c.Executor != nil {
+		return c.Executor.Cancel(ctx, run)
+	}
 	if cancelled {
 		return nil
 	}
 	phase, _, err := unstructured.NestedString(run.Object, "status", "phase")
 	if err != nil {
 		return err
+	}
+	if c.Executor != nil && (phase == "Failed" || phase == "RequiresReview" || phase == "Cancelling") {
+		return c.Executor.Cancel(ctx, run)
 	}
 	if phase != "" && phase != "Pending" && phase != "Running" {
 		return nil

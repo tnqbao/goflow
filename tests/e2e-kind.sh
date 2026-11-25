@@ -122,7 +122,6 @@ spec:
   execution: {maxConcurrentSteps: 2, timeoutSeconds: 60}
 YAML
 kubectl --kubeconfig "$kubeconfig" apply -f "$workdir/videorun.yaml"
-kubectl --kubeconfig "$kubeconfig" -n kubereel-test patch videorun sample-run --type=merge -p '{"spec":{"cancelRequested":true}}'
 if kubectl --kubeconfig "$kubeconfig" -n kubereel-test patch videorun sample-run --type=merge -p '{"spec":{"workflowSnapshot":{"steps":[{"name":"changed","type":"output"}]}}}' >"$workdir/immutable.log" 2>&1; then
   printf 'VideoRun snapshot update was accepted\n' >&2
   exit 1
@@ -153,13 +152,14 @@ python3 - "$workdir/videorun.json" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as source:
     run = json.load(source)
-assert run["spec"]["cancelRequested"] is True
+assert run["spec"]["cancelRequested"] is False
 assert run["spec"]["inputs"]["enabled"]["booleanValue"] is False
 assert run["spec"]["workflowSnapshot"]["steps"][0]["name"] == "script"
 assert run["status"]["phase"] == "Running"
 assert run["status"]["steps"][0]["providerRequestID"] == "request-1"
 assert run["status"]["artifacts"] == ["artifact-1"]
 PY
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test patch videorun sample-run --type=merge -p '{"spec":{"cancelRequested":true}}'
 cat >"$workdir/reconcile-runs.yaml" <<'YAML'
 apiVersion: kubereel.io/v1alpha1
 kind: VideoRun
@@ -277,6 +277,34 @@ artifact=$(kubectl --kubeconfig "$kubeconfig" -n kubereel-test get videorun mock
 kubectl --kubeconfig "$kubeconfig" -n kubereel-test exec deployment/kubereel-kubereel -- cat "/data/$artifact" >"$workdir/image.svg"
 if ! grep -q 'VideoRun mock image' "$workdir/image.svg"; then
   printf 'VideoRun image artifact did not contain the prompt\n' >&2
+  exit 1
+fi
+cat >"$workdir/cancel-run.yaml" <<'YAML'
+apiVersion: kubereel.io/v1alpha1
+kind: VideoRun
+metadata:
+  name: cancel-run
+  namespace: kubereel-test
+spec:
+  workflowRef: sample
+  workflowSnapshot:
+    steps:
+      - name: image
+        type: image
+        providerRef: mock
+        resources:
+          requests: {cpu: "1000000", memory: 128Mi}
+          limits: {cpu: "1000000", memory: 512Mi}
+  inputs:
+    prompt: {stringValue: "Cancel this Job"}
+YAML
+kubectl --kubeconfig "$kubeconfig" apply -f "$workdir/cancel-run.yaml"
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test wait --for=jsonpath='{.status.phase}'=Running videorun/cancel-run --timeout=60s
+cancel_job=$(kubectl --kubeconfig "$kubeconfig" -n kubereel-test get videorun cancel-run -o jsonpath='{.status.steps[0].jobName}')
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test patch videorun cancel-run --type=merge -p '{"spec":{"cancelRequested":true}}'
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test wait --for=jsonpath='{.status.phase}'=Cancelled videorun/cancel-run --timeout=120s
+if [ -n "$(kubectl --kubeconfig "$kubeconfig" -n kubereel-test get job "$cancel_job" --ignore-not-found -o name)" ]; then
+  printf 'cancelled Job still exists\n' >&2
   exit 1
 fi
 kubectl --kubeconfig "$kubeconfig" -n kubereel-test port-forward --address 127.0.0.1 service/kubereel-kubereel :8080 >"$workdir/forward.log" 2>&1 &

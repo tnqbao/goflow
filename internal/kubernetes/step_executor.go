@@ -34,7 +34,10 @@ type executableStep struct {
 	Type           string `json:"type"`
 	ProviderRef    string `json:"providerRef"`
 	TimeoutSeconds int64  `json:"timeoutSeconds"`
-	Resources      struct {
+	Retry          struct {
+		MaxAttempts int64 `json:"maxAttempts"`
+	} `json:"retry"`
+	Resources struct {
 		Requests map[string]string `json:"requests"`
 		Limits   map[string]string `json:"limits"`
 	} `json:"resources"`
@@ -47,38 +50,13 @@ func (e *StepExecutor) Reconcile(ctx context.Context, run *unstructured.Unstruct
 	}
 	e.JobLock.Lock()
 	defer e.JobLock.Unlock()
-	snapshotMap, found, err := unstructured.NestedMap(run.Object, "spec", "workflowSnapshot")
+	steps, err := executableSteps(run)
 	if err != nil {
-		return fmt.Errorf("read workflow snapshot: %w", err)
+		return err
 	}
-	if !found {
-		return fmt.Errorf("workflow snapshot is missing")
-	}
-	data, err := json.Marshal(snapshotMap)
+	statuses, byName, err := stepStatuses(status)
 	if err != nil {
-		return fmt.Errorf("encode workflow snapshot: %w", err)
-	}
-	var snapshot struct {
-		Steps []executableStep `json:"steps"`
-	}
-	if err := json.Unmarshal(data, &snapshot); err != nil {
-		return fmt.Errorf("decode workflow snapshot: %w", err)
-	}
-	statuses, _, err := unstructured.NestedSlice(status, "steps")
-	if err != nil {
-		return fmt.Errorf("read step statuses: %w", err)
-	}
-	byName := make(map[string]map[string]interface{}, len(statuses))
-	for _, item := range statuses {
-		step, ok := item.(map[string]interface{})
-		if !ok {
-			return fmt.Errorf("invalid step status")
-		}
-		name, ok := step["name"].(string)
-		if !ok {
-			return fmt.Errorf("invalid step status name")
-		}
-		byName[name] = step
+		return err
 	}
 	limit, hasLimit, err := unstructured.NestedInt64(run.Object, "spec", "execution", "maxConcurrentSteps")
 	if err != nil {
@@ -90,7 +68,7 @@ func (e *StepExecutor) Reconcile(ctx context.Context, run *unstructured.Unstruct
 			running++
 		}
 	}
-	for _, step := range snapshot.Steps {
+	for _, step := range steps {
 		if step.Type != "image" || step.ProviderRef != "mock" {
 			continue
 		}
@@ -127,6 +105,47 @@ func (e *StepExecutor) Reconcile(ctx context.Context, run *unstructured.Unstruct
 	return nil
 }
 
+func executableSteps(run *unstructured.Unstructured) ([]executableStep, error) {
+	snapshotMap, found, err := unstructured.NestedMap(run.Object, "spec", "workflowSnapshot")
+	if err != nil {
+		return nil, fmt.Errorf("read workflow snapshot: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("workflow snapshot is missing")
+	}
+	data, err := json.Marshal(snapshotMap)
+	if err != nil {
+		return nil, fmt.Errorf("encode workflow snapshot: %w", err)
+	}
+	var snapshot struct {
+		Steps []executableStep `json:"steps"`
+	}
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return nil, fmt.Errorf("decode workflow snapshot: %w", err)
+	}
+	return snapshot.Steps, nil
+}
+
+func stepStatuses(status map[string]interface{}) ([]interface{}, map[string]map[string]interface{}, error) {
+	statuses, _, err := unstructured.NestedSlice(status, "steps")
+	if err != nil {
+		return nil, nil, fmt.Errorf("read step statuses: %w", err)
+	}
+	byName := make(map[string]map[string]interface{}, len(statuses))
+	for _, item := range statuses {
+		step, ok := item.(map[string]interface{})
+		if !ok {
+			return nil, nil, fmt.Errorf("invalid step status")
+		}
+		name, ok := step["name"].(string)
+		if !ok {
+			return nil, nil, fmt.Errorf("invalid step status name")
+		}
+		byName[name] = step
+	}
+	return statuses, byName, nil
+}
+
 func (e *StepExecutor) submit(ctx context.Context, run *unstructured.Unstructured, status map[string]interface{}, statuses []interface{}, step executableStep, entry map[string]interface{}, prompt string) error {
 	active, err := e.Store.Active(ctx)
 	if err != nil {
@@ -144,7 +163,14 @@ func (e *StepExecutor) submit(ctx context.Context, run *unstructured.Unstructure
 	if count >= e.MaxConcurrent {
 		return nil
 	}
-	job, err := StepJob(run.GetName(), run.GetUID(), step.Name, e.Config)
+	attempt, err := stepAttempt(entry)
+	if err != nil {
+		return err
+	}
+	if attempt >= attemptLimit(step) {
+		return e.mark(ctx, run, status, statuses, entry, "Failed", "step retry limit exhausted")
+	}
+	job, err := StepJob(run.GetName(), run.GetUID(), step.Name, attempt+1, e.Config)
 	if err != nil {
 		return err
 	}
@@ -165,7 +191,8 @@ func (e *StepExecutor) submit(ctx context.Context, run *unstructured.Unstructure
 	entry["phase"] = "Running"
 	entry["ready"] = false
 	entry["jobName"] = job.Name
-	entry["attempts"] = int64(1)
+	entry["attempts"] = attempt + 1
+	delete(entry, "error")
 	status["phase"] = "Running"
 	status["steps"] = statuses
 	if err := updateVideoRunStatus(ctx, e.Runs, run, status); err != nil {
@@ -178,7 +205,14 @@ func (e *StepExecutor) submit(ctx context.Context, run *unstructured.Unstructure
 }
 
 func (e *StepExecutor) observe(ctx context.Context, run *unstructured.Unstructured, status map[string]interface{}, statuses []interface{}, step executableStep, entry map[string]interface{}) (bool, error) {
-	expected, err := StepJob(run.GetName(), run.GetUID(), step.Name, e.Config)
+	attempt, err := stepAttempt(entry)
+	if err != nil {
+		return false, err
+	}
+	if attempt == 0 {
+		return true, e.mark(ctx, run, status, statuses, entry, "RequiresReview", "recorded attempt is missing")
+	}
+	expected, err := StepJob(run.GetName(), run.GetUID(), step.Name, attempt, e.Config)
 	if err != nil {
 		return false, err
 	}
@@ -199,42 +233,86 @@ func (e *StepExecutor) observe(ctx context.Context, run *unstructured.Unstructur
 		return true, e.mark(ctx, run, status, statuses, entry, "RequiresReview", err.Error())
 	}
 	if finished(job, batchv1.JobFailed) {
-		return true, e.mark(ctx, run, status, statuses, entry, "Failed", "step Job failed")
+		return true, e.retryOrFail(ctx, run, status, statuses, step, entry, attempt)
 	}
 	if !finished(job, batchv1.JobComplete) {
 		return false, nil
 	}
-	id := expected.Labels["kubereel.io/workflow"]
+	return true, e.recordSuccess(ctx, run, status, statuses, entry, expected, true)
+}
+
+func (e *StepExecutor) recordSuccess(ctx context.Context, run *unstructured.Unstructured, status map[string]interface{}, statuses []interface{}, entry map[string]interface{}, job *batchv1.Job, finishRun bool) error {
+	id := job.Labels["kubereel.io/workflow"]
 	artifact := filepath.Join("workflows", id, "scene.svg")
-	err = mock.ValidateSVG(ctx, filepath.Join(e.DataDir, artifact))
+	err := mock.ValidateSVG(ctx, filepath.Join(e.DataDir, artifact))
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false, err
+		return err
+	}
+	if err != nil && !finishRun {
+		entry["phase"] = "Failed"
+		entry["ready"] = false
+		entry["error"] = "step artifact is missing or invalid"
+		status["steps"] = statuses
+		return updateVideoRunStatus(ctx, e.Runs, run, status)
 	}
 	if err != nil {
-		return true, e.mark(ctx, run, status, statuses, entry, "Failed", "step artifact is missing or invalid")
+		return e.mark(ctx, run, status, statuses, entry, "Failed", "step artifact is missing or invalid")
 	}
 	entry["phase"] = "Succeeded"
 	entry["ready"] = false
 	status["steps"] = statuses
 	artifacts, _, err := unstructured.NestedStringSlice(status, "artifacts")
 	if err != nil {
-		return false, fmt.Errorf("read run artifacts: %w", err)
+		return fmt.Errorf("read run artifacts: %w", err)
 	}
 	if !contains(artifacts, artifact) {
 		artifacts = append(artifacts, artifact)
 	}
 	if err := unstructured.SetNestedStringSlice(status, artifacts, "artifacts"); err != nil {
-		return false, err
+		return err
 	}
-	if !allStepsSucceeded(statuses) {
-		return true, updateVideoRunStatus(ctx, e.Runs, run, status)
+	if !finishRun || !allStepsSucceeded(statuses) {
+		return updateVideoRunStatus(ctx, e.Runs, run, status)
 	}
 	status["phase"] = "Succeeded"
 	if err := validateRunOutputs(run, statuses); err != nil {
 		status["phase"] = "Failed"
 		status["error"] = err.Error()
 	}
-	return true, updateVideoRunStatus(ctx, e.Runs, run, status)
+	return updateVideoRunStatus(ctx, e.Runs, run, status)
+}
+
+func stepAttempt(entry map[string]interface{}) (int64, error) {
+	attempt, found, err := unstructured.NestedInt64(entry, "attempts")
+	if err != nil {
+		return 0, fmt.Errorf("read step attempts: %w", err)
+	}
+	if !found {
+		return 0, nil
+	}
+	if attempt < 0 || attempt > 100 {
+		return 0, fmt.Errorf("invalid step attempts")
+	}
+	return attempt, nil
+}
+
+func (e *StepExecutor) retryOrFail(ctx context.Context, run *unstructured.Unstructured, status map[string]interface{}, statuses []interface{}, step executableStep, entry map[string]interface{}, attempt int64) error {
+	if attempt >= attemptLimit(step) {
+		return e.mark(ctx, run, status, statuses, entry, "Failed", "step Job failed")
+	}
+	entry["phase"] = "Pending"
+	entry["ready"] = true
+	entry["error"] = "previous step Job failed"
+	delete(entry, "jobName")
+	status["steps"] = statuses
+	return updateVideoRunStatus(ctx, e.Runs, run, status)
+}
+
+func attemptLimit(step executableStep) int64 {
+	if step.Retry.MaxAttempts == 0 {
+		return 1
+	}
+	return step.Retry.MaxAttempts
 }
 
 func validateRunOutputs(run *unstructured.Unstructured, statuses []interface{}) error {

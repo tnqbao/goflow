@@ -31,11 +31,18 @@ func activeVideoJobs(ctx context.Context, jobs Jobs, instance string) (int, erro
 }
 
 // StepJob builds a deterministic Mock image Job owned by a VideoRun.
-func StepJob(runName string, uid types.UID, stepName string, cfg JobConfig) (*batchv1.Job, error) {
+func StepJob(runName string, uid types.UID, stepName string, attempt int64, cfg JobConfig) (*batchv1.Job, error) {
 	if runName == "" || uid == "" || stepName == "" {
 		return nil, fmt.Errorf("run name, UID and step name are required")
 	}
-	hash := sha256.Sum256([]byte(string(uid) + "\x00" + stepName))
+	if attempt < 1 || attempt > 100 {
+		return nil, fmt.Errorf("attempt must be between 1 and 100")
+	}
+	identity := string(uid) + "\x00" + stepName
+	if attempt > 1 {
+		identity = fmt.Sprintf("%s\x00%d", identity, attempt)
+	}
+	hash := sha256.Sum256([]byte(identity))
 	id := hex.EncodeToString(hash[:16])
 	job, err := Job(id, "worker", cfg)
 	if err != nil {

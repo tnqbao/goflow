@@ -250,6 +250,8 @@ spec:
                       - RequiresReview
                     ready:
                       type: boolean
+                    deletionRequested:
+                      type: boolean
                     jobName:
                       type: string
                       maxLength: 253
