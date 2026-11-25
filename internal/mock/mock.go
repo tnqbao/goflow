@@ -9,8 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
+	providermock "github.com/tnqbao/kubereel/internal/provider/mock"
 	"github.com/tnqbao/kubereel/internal/storage"
 )
 
@@ -30,16 +30,11 @@ func Generate(ctx context.Context, artifacts storage.Store, input, output string
 	if err := json.Unmarshal(data, &req); err != nil {
 		return fmt.Errorf("decode mock request: %w", err)
 	}
-	prompt := strings.TrimSpace(req.Prompt)
-	if prompt == "" || len(prompt) > 8192 {
-		return fmt.Errorf("invalid mock prompt")
+	svg, err := providermock.SVG(req.Prompt)
+	if err != nil {
+		return err
 	}
-	var escaped bytes.Buffer
-	if err := xml.EscapeText(&escaped, []byte(prompt)); err != nil {
-		return fmt.Errorf("escape prompt: %w", err)
-	}
-	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720"><rect width="1280" height="720" fill="#18202b"/><text x="64" y="90" fill="#fff" font-family="sans-serif" font-size="32">Mock scene</text><text x="64" y="150" fill="#fff" font-family="sans-serif" font-size="24">` + escaped.String() + `</text></svg>`
-	return artifacts.Put(ctx, output, strings.NewReader(svg))
+	return artifacts.Put(ctx, output, bytes.NewReader(svg))
 }
 
 // Render validates and copies a generated SVG as the final mock artifact.

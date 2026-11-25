@@ -61,6 +61,8 @@ curl http://localhost:8080/api/workflows/WORKFLOW_ID
 curl -o mock-scene.svg http://localhost:8080/api/workflows/WORKFLOW_ID/artifact
 ```
 
+The Mock adapter can generate sample text, SVG images and short MP4 clips, and simulate latency, errors and rate limits. Its asynchronous handles are local to one adapter instance and do not survive a restart; the current workflow only uses Mock image generation. The full Mock workflow is not yet implemented.
+
 These endpoints are experimental and do not yet implement the versioned API described in the specification. `GET /api/providers` lists current execution availability; `mock` is the only available provider.
 
 The default PVC uses `ReadWriteOnce` and Jobs are placed on the control-plane node. For multi-node execution, provide `ReadWriteMany` storage and set `storage.accessMode=ReadWriteMany`. To use an existing claim, set `storage.existingClaim` and match its access mode.
