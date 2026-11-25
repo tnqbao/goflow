@@ -1,96 +1,144 @@
 # KubeReel
 
-KubeReel is a self-hosted, Kubernetes-native platform for automating AI video production.
+Self-hosted, Kubernetes-native platform for automating AI video production.
 
 **Install once. Connect your providers. Automate video production.**
 
-The project is in initial development. Its target architecture is a modular monolith: one Go executable and one image run the control plane, while temporary Kubernetes Jobs execute workflow steps. The full product requirements and roadmap are in [SPEC.md](SPEC.md).
+## Architecture
 
-## Current implementation
+KubeReel runs as a single Go executable and single container image (`iamqbao/kubereel`) containing the control plane, embedded UI, and FFmpeg:
 
-- A Go service exposes health endpoints, an embedded interface and an experimental workflow API.
-- In Kubernetes mode, the control plane persists workflow state and creates worker and render Jobs using the same image.
-- The built-in Mock produces a labeled SVG placeholder without external services or credentials. It does **not** yet produce video or an MP4.
-- The `VideoWorkflow`, `VideoRun`, and `VideoProvider` CRDs define configuration and execution records. The VideoRun controller validates snapshots and runs supported Mock image steps as Kubernetes Jobs. FFmpeg rendering, provider integrations, authentication and the target `/api/v1` API remain roadmap work.
+- `kubereel serve` — starts the HTTP server, embedded dashboard, and Kubernetes controllers.
+- `kubereel worker` — executes an assigned workflow step inside a temporary Kubernetes Job.
+- `kubereel render` — executes media rendering inside a temporary Kubernetes Job.
 
-The current management API and interface do not provide authentication. Keep them on a trusted network and use local port forwarding; do not expose them publicly.
+Kubernetes state is managed via three CRDs (`VideoWorkflow`, `VideoRun`, `VideoProvider`) and PVC-backed artifact storage, with no external database or message broker required.
 
-## Single executable
+> **Security notice:** Authentication is not yet implemented. Run KubeReel only on a trusted network and access it via local port-forwarding; do not expose the service or Ingress publicly.
 
-The same `kubereel` executable provides `serve`, `worker` and `render` commands. `serve` starts the current control plane. `worker` creates a Mock SVG from a JSON request, and `render` validates and copies that SVG; the FFmpeg renderer and real provider execution are future work. Run either worker command with `--input` and `--output` paths.
+---
 
-## Run locally
+## Quick Start — Kubernetes (Helm via Docker Hub)
+
+Install directly from Docker Hub OCI registry (zero extra configuration required on clusters with a default `StorageClass`):
+
+```sh
+helm install kubereel oci://registry-1.docker.io/iamqbao/kubereel-chart \
+  --version 0.1.0 \
+  --namespace kubereel \
+  --create-namespace
+```
+
+Forward the service port locally:
+
+```sh
+kubectl -n kubereel port-forward service/kubereel-kubereel 8080:8080
+```
+
+- **Web UI:** Open `http://localhost:8080/workflows` to run the built-in Mock workflow.
+- **Health checks:** `http://localhost:8080/healthz` and `http://localhost:8080/readyz`.
+- **API test:**
+
+```sh
+curl -i -X POST http://localhost:8080/api/workflows \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"A quiet lake"}'
+
+curl http://localhost:8080/api/workflows/<WORKFLOW_ID>
+curl -o mock-scene.svg http://localhost:8080/api/workflows/<WORKFLOW_ID>/artifact
+```
+
+### Common Helm Values
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `image.repository` | `iamqbao/kubereel` | Container image repository for control plane and Jobs |
+| `image.tag` | `"0.1.0"` | Pinned image tag (`latest` is rejected) |
+| `storage.size` | `10Gi` | PVC size for `/data` |
+| `storage.accessMode` | `ReadWriteOnce` | Use `ReadWriteMany` for multi-node Job scheduling |
+| `storage.existingClaim` | `""` | Existing PVC name (must match `storage.accessMode`) |
+| `storage.maxArtifactBytes` | `1073741824` | Max size per artifact (1 GiB) |
+| `storage.retentionSeconds` | `0` | Expiry for completed `VideoRun` artifacts (`0` disables) |
+| `execution.maxConcurrentJobs` | `5` | Max concurrent Kubernetes Jobs |
+| `execution.jobTTLSeconds` | `86400` | Finished Job retention window (24h) |
+| `ingress.enabled` | `false` | Optional Ingress (requires `ingress.host`) |
+
+### Upgrading & CRDs
+
+Helm installs CRDs on initial install but does not automatically update them on upgrade. Apply CRD changes before running `helm upgrade`:
+
+```sh
+kubectl apply -f charts/kubereel/crds/
+helm upgrade kubereel oci://registry-1.docker.io/iamqbao/kubereel-chart \
+  --version 0.1.0 \
+  --namespace kubereel
+```
+
+---
+
+## Quick Start — Docker & Local
+
+### Docker Hub Image
+
+```sh
+docker run --rm -p 127.0.0.1:8080:8080 -v kubereel-data:/data iamqbao/kubereel:0.1.0 serve
+```
+
+### Docker Compose
+
+```sh
+docker compose up --build
+```
+
+### Run from Source
 
 ```sh
 DATA_DIR=./data go run . serve
 ```
 
-The data directory defaults to `/data`, with the database stored as `kubereel.db`. Health endpoints are available at `http://localhost:8080/healthz` and `/readyz`. Standalone `serve` currently exposes health endpoints; workflow execution and its interface require Kubernetes mode.
+> Standalone mode exposes health endpoints (`/healthz`, `/readyz`); full workflow execution requires Kubernetes mode.
 
-Existing local data and volumes are not moved or deleted automatically; back them up before changing data locations.
+---
 
-## Docker
-
-The image runs as a non-root user and includes FFmpeg. The current `render`
-command still copies the Mock SVG; FFmpeg-based rendering is planned for F19.
+## Build & Publish to Docker Hub
 
 ```sh
-docker build -t kubereel:local .
-docker run --rm -p 127.0.0.1:8080:8080 -v kubereel-data:/data kubereel:local serve
-./tests/docker-smoke.sh kubereel:local
+# 1. Authenticate Docker and Helm with Docker Hub
+docker login -u iamqbao
+helm registry login registry-1.docker.io -u iamqbao
+
+# 2. Build, smoke-test, and push container image
+docker build -t iamqbao/kubereel:0.1.0 .
+./tests/docker-smoke.sh iamqbao/kubereel:0.1.0
+docker push iamqbao/kubereel:0.1.0
+
+# 3. Package and push Helm chart (OCI)
+helm lint ./charts/kubereel
+helm package ./charts/kubereel
+helm push kubereel-chart-0.1.0.tgz oci://registry-1.docker.io/iamqbao
 ```
 
-`docker compose up --build` also starts the standalone service and uses the `kubereel-data` volume.
+CI/CD (`.github/workflows/pipeline.yml`) automatically runs `build` -> `test` -> `push` to publish verified container images on pushes to `develop`, `main`, and `v*` tags.
 
-## Helm development installation
+---
 
-The current chart uses one permanent control-plane container and creates temporary worker and render Jobs using the same image. Its default `kubereel:0.1.0` is a local development tag, not a published release. Build the image and make it available to the cluster nodes, or provide an image from an accessible registry:
-
-```sh
-helm install kubereel ./charts/kubereel \
-  --set image.repository=YOUR_REGISTRY/kubereel --set image.tag=TAG
-kubectl port-forward service/kubereel-kubereel 8080:8080
-```
-
-Open `/workflows` to run the current Mock prototype. The development API also accepts a workflow request and returns a `Location` header for its status:
-
-```sh
-curl -i -X POST http://localhost:8080/api/workflows \
-  -H 'Content-Type: application/json' -d '{"prompt":"A quiet lake"}'
-curl http://localhost:8080/api/workflows/WORKFLOW_ID
-curl -o mock-scene.svg http://localhost:8080/api/workflows/WORKFLOW_ID/artifact
-```
-
-The Mock adapter can generate sample text, SVG images and short MP4 clips, and simulate latency, errors and rate limits. Its asynchronous handles are local to one adapter instance and do not survive a restart; the current workflow only uses Mock image generation. The full Mock workflow is not yet implemented.
-
-These endpoints are experimental and do not yet implement the versioned API described in the specification. `GET /api/providers` lists current execution availability; `mock` is the only available provider.
-
-The default PVC uses `ReadWriteOnce` and Jobs are placed on the control-plane node. For multi-node execution, provide `ReadWriteMany` storage and set `storage.accessMode=ReadWriteMany`. To use an existing claim, set `storage.existingClaim` and match its access mode.
-
-Artifacts are limited to 1 GiB each by default; set `storage.maxArtifactBytes` or `ARTIFACT_MAX_BYTES` to change the limit. `storage.retentionSeconds` or `ARTIFACT_RETENTION_SECONDS` configures the retention interval; zero disables expiry. Published artifacts from successful VideoRuns with a recorded completion time are checked for expiry periodically. Failed, cancelled, older VideoRuns without completion times, and legacy workflows are retained; their automatic cleanup is not implemented. Artifact endpoints do not yet have authentication and must not be exposed publicly.
-
-The chart defaults to a 10 GiB PVC, five concurrent Jobs and a 24-hour finished Job retention period (`execution.jobTTLSeconds`). A short retention period can remove a finished Job before the controller observes it, leaving its run in `RequiresReview`. The chart currently supports one replica, Kubernetes execution and PVC storage only. Authentication and a complete MP4 workflow remain future tasks; the optional ingress must not be publicly exposed while authentication is unavailable.
-
-Helm installs the `VideoWorkflow`, `VideoRun`, and `VideoProvider` CRDs on initial installation, but does not upgrade or delete CRDs automatically. When upgrading an existing installation, install new CRDs separately with `kubectl apply -f charts/kubereel/crds/` before upgrading the chart. Back up custom resources and review CRD changes first. Deleting a CRD deletes all its resources in the cluster.
-
-`VideoRun` stores a required immutable copy of the workflow spec and immutable run inputs. Input values are represented by exactly one of `stringValue`, `integerValue`, `numberValue`, or `booleanValue`. The controller supports `image` steps with `providerRef: mock` and a `spec.inputs.prompt.stringValue`, producing an SVG artifact. Other step types remain pending until their executors are implemented. Failed Mock Jobs are retried up to the configured `maxAttempts`; an uncertain or missing submission is marked `RequiresReview` rather than resubmitted. Cancellation waits for foreground deletion of active Jobs before reporting `Cancelled`.
-
-Job configuration is recorded with each submission so a restarted or upgraded controller can verify existing Jobs and keep retries on the original image reference. Use an immutable image reference when retries must use identical image contents. Older in-flight runs without a recorded configuration are checked against the current configuration; a mismatch requires review. An older retry that was already pending without recorded configuration also requires review. Review is required when a reserved Job is missing, because the controller cannot establish whether it ran.
-
-`VideoProvider` stores provider configuration and references credentials by a Secret name and key in the same namespace. It does not activate an integration; Gemini and fal.ai adapters are future tasks. The HTTPS syntax check on `baseURL` does not replace endpoint and SSRF validation before a provider uses it.
-
-When upgrading an older development installation, migrate `persistence.*` values to `storage.*` and `workflow.maxConcurrent` to `execution.maxConcurrentJobs`. The chart rejects the old keys to avoid silently changing the selected PVC. Back up the PVC before upgrading and preserve its existing claim name, access mode and size; increasing the size requires a StorageClass that supports expansion.
-
-## Validation
+## Development & Validation
 
 ```sh
 go fmt ./...
 go vet ./...
-go test ./...
+go test -race ./...
 go build ./...
+
 helm lint ./charts/kubereel
-helm template kubereel ./charts/kubereel
+helm template kubereel ./charts/kubereel > /dev/null
 python3 charts/kubereel/tests/test_chart.py
+
+# Full Kind end-to-end test (requires Docker, Kind, Helm, kubectl, Python 3)
+./tests/e2e-kind.sh
 ```
 
-With Kind v0.27.0, Docker, Helm, kubectl and Python 3 installed, `tests/e2e-kind.sh` builds (or accepts a pre-built image tag) and smoke-tests an image, creates an isolated temporary cluster, runs the Mock workflow and verifies Job cleanup. It removes its test resources afterward. The GitHub Actions pipeline (`.github/workflows/pipeline.yml`) runs sequential `build` -> `test` -> `push` stages, publishing verified images to Docker Hub on pushes to `develop`, `main`, and version tags (`v*`).
+## Current Status & Limitations
+
+- The `mock` provider is enabled out of the box (no API keys required). Real provider integrations (Gemini, fal.ai), FFmpeg workflow rendering, authentication, and the `/api/v1` contract are in active development.
+- Current Kubernetes execution runs `image` steps using `mock` to produce SVG artifacts; failed Jobs retry up to `maxAttempts`, while missing/uncertain Jobs transition to `RequiresReview` rather than risking duplicate submission.

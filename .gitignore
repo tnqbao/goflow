@@ -3,9 +3,15 @@
 /kubereel
 *.test
 coverage.out
+*.tgz
 
 # Local data
 /data/
 *.db
 *.db-shm
 *.db-wal
+
+# Internal specification and agent handoff docs
+/SPEC.md
+/AGENTS.md
+/context.txt

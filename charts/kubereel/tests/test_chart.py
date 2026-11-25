@@ -77,7 +77,7 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(env["EXECUTION_MODE"], "kubernetes")
         self.assertEqual(env["MAX_CONCURRENT_JOBS"], "5")
         self.assertEqual(env["JOB_TTL_SECONDS"], "86400")
-        self.assertEqual(container["image"], "kubereel:0.1.0")
+        self.assertEqual(container["image"], "iamqbao/kubereel:0.1.0")
         self.assertEqual(env["JOB_IMAGE"], container["image"])
         self.assertEqual(env["SHARED_STORAGE"], "false")
         self.assertEqual(env["PVC_NAME"], docs["PersistentVolumeClaim"]["metadata"]["name"])
