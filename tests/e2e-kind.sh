@@ -882,7 +882,71 @@ revoke = urllib.request.Request(
 with browser.open(revoke, timeout=5) as response:
     if response.status != 204:
         raise RuntimeError('dashboard could not revoke the API token')
-print('Embedded dashboard, authenticated API and CSRF-protected actions verified')
+
+visual_wf_create = urllib.request.Request(
+    base + '/api/v1/workflows',
+    data=json.dumps({
+        'id': 'visual-editor-e2e',
+        'spec': {
+            'description': 'Visual editor DAG test',
+            'inputs': [{'name': 'prompt', 'type': 'string', 'required': True}],
+            'steps': [
+                {'name': 'script', 'type': 'llm', 'providerRef': 'mock'},
+                {'name': 'scene', 'type': 'video', 'providerRef': 'mock', 'dependsOn': ['script']},
+                {
+                    'name': 'render',
+                    'type': 'ffmpeg',
+                    'dependsOn': ['scene'],
+                    'ffmpeg': {'operation': 'render_mp4', 'aspectRatio': '16:9'},
+                },
+            ],
+            'outputs': [{'name': 'video', 'from': 'render'}],
+        },
+    }).encode('utf-8'),
+    headers={'Content-Type': 'application/json', 'X-CSRF-Token': user['csrfToken']},
+    method='POST',
+)
+with browser.open(visual_wf_create, timeout=5) as response:
+    created_wf = json.load(response)
+    if response.status != 201 or len(created_wf['spec']['steps']) != 3:
+        raise RuntimeError('visual editor workflow creation failed')
+
+visual_wf_patch = urllib.request.Request(
+    base + '/api/v1/workflows/visual-editor-e2e',
+    data=json.dumps({
+        'resourceVersion': created_wf['resourceVersion'],
+        'spec': {
+            'description': None,
+            'inputs': [{'name': 'prompt', 'type': 'string', 'required': True}],
+            'steps': [
+                {'name': 'intro-clip', 'type': 'video', 'providerRef': 'mock'},
+                {
+                    'name': 'render',
+                    'type': 'ffmpeg',
+                    'dependsOn': ['intro-clip'],
+                    'ffmpeg': {'operation': 'render_mp4', 'aspectRatio': '9:16'},
+                },
+            ],
+            'outputs': [{'name': 'video', 'from': 'render'}],
+        },
+    }).encode('utf-8'),
+    headers={'Content-Type': 'application/json', 'X-CSRF-Token': user['csrfToken']},
+    method='PATCH',
+)
+with browser.open(visual_wf_patch, timeout=5) as response:
+    patched_wf = json.load(response)
+    if response.status != 200 or 'description' in patched_wf['spec'] or len(patched_wf['spec']['steps']) != 2:
+        raise RuntimeError('visual editor workflow patch failed')
+
+visual_wf_delete = urllib.request.Request(
+    base + '/api/v1/workflows/visual-editor-e2e',
+    headers={'X-CSRF-Token': user['csrfToken']},
+    method='DELETE',
+)
+with browser.open(visual_wf_delete, timeout=5) as response:
+    if response.status != 204:
+        raise RuntimeError('visual editor workflow delete failed')
+print('Embedded dashboard, visual workflow DAG API, and CSRF-protected actions verified')
 
 form_body = urllib.parse.urlencode({
     'prompt': 'UI mock workflow',

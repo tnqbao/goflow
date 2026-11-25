@@ -7,6 +7,7 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@xyflow/react": "13.0.3",
     "lucide-react": "0.468.0",
     "react": "19.2.9",
     "react-dom": "19.2.9"

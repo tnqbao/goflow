@@ -1,33 +1,56 @@
 import { useState } from 'react'
-import { Download, FilePlus2, Play, Plus, Trash2 } from 'lucide-react'
+import {
+  Download,
+  FilePlus2,
+  GitFork,
+  Play,
+  Plus,
+  Trash2,
+} from 'lucide-react'
 import { idPath, request, useResource } from './api'
 import { executionBody } from './data'
 import type { Input, Run, Workflow } from './types'
 import { ActionForm, Alert, Empty, Loading, Modal } from './ui'
+import { WorkflowEditor } from './workflowEditor'
 
-const initialSpec = {
-  inputs: [{ name: 'prompt', type: 'string', required: true }],
-  steps: [{ name: 'scene', type: 'video', providerRef: 'mock' }],
-  outputs: [{ name: 'video', from: 'scene' }],
-}
 type Dialog =
-  | { kind: 'edit' | 'run' | 'delete'; item: Workflow }
-  | { kind: 'new' | 'import' }
+  | { kind: 'run' | 'delete'; item: Workflow }
+  | { kind: 'import' }
+
+type EditorState =
+  | { kind: 'new' }
+  | { kind: 'edit'; item: Workflow }
 
 export function Workflows() {
   const data = useResource<Workflow[]>('/workflows', true)
   const [dialog, setDialog] = useState<Dialog>()
-  const close = () => setDialog(undefined)
-  const done = () => {
+  const [editor, setEditor] = useState<EditorState>()
+  const closeDialog = () => setDialog(undefined)
+  const doneDialog = () => {
     data.refresh()
-    close()
+    closeDialog()
   }
+
+  if (editor) {
+    return (
+      <WorkflowEditor
+        key={editor.kind === 'edit' ? `${editor.item.id}:${editor.item.resourceVersion}` : 'new'}
+        item={editor.kind === 'edit' ? editor.item : undefined}
+        onCancel={() => setEditor(undefined)}
+        onSaved={() => {
+          setEditor(undefined)
+          data.refresh()
+        }}
+      />
+    )
+  }
+
   return (
     <div className="stack">
       <div className="inline-actions">
         <button
           className="button primary"
-          onClick={() => setDialog({ kind: 'new' })}
+          onClick={() => setEditor({ kind: 'new' })}
         >
           <Plus size={18} /> New workflow
         </button>
@@ -63,7 +86,7 @@ export function Workflows() {
                     <td>
                       <button
                         className="row-link"
-                        onClick={() => setDialog({ kind: 'edit', item })}
+                        onClick={() => setEditor({ kind: 'edit', item })}
                       >
                         {item.id}
                       </button>
@@ -77,6 +100,12 @@ export function Workflows() {
                     <td>{item.spec.inputs?.length ?? 0}</td>
                     <td>
                       <div className="inline-actions">
+                        <button
+                          className="button secondary"
+                          onClick={() => setEditor({ kind: 'edit', item })}
+                        >
+                          <GitFork size={15} /> Visual editor
+                        </button>
                         <button
                           className="button secondary"
                           onClick={() => setDialog({ kind: 'run', item })}
@@ -106,31 +135,28 @@ export function Workflows() {
           </div>
         ) : data.value ? (
           <Empty>
-            No workflow definitions. Create one or import a JSON definition.
+            No workflow definitions. Create one in the visual editor or import a
+            JSON definition.
           </Empty>
         ) : (
           !data.error && <Loading />
         )}
       </section>
-      {dialog?.kind === 'new' && <Editor close={close} done={done} />}
-      {dialog?.kind === 'edit' && (
-        <Editor item={dialog.item} close={close} done={done} />
-      )}
       {dialog?.kind === 'import' && (
-        <ImportWorkflow close={close} done={done} />
+        <ImportWorkflow close={closeDialog} done={doneDialog} />
       )}
       {dialog?.kind === 'run' && (
-        <LaunchWorkflow item={dialog.item} close={close} />
+        <LaunchWorkflow item={dialog.item} close={closeDialog} />
       )}
       {dialog?.kind === 'delete' && (
-        <Modal title="Delete workflow" close={close}>
+        <Modal title="Delete workflow" close={closeDialog}>
           <ActionForm
             label="Delete workflow"
             submit={async () => {
               await request('/workflows/' + idPath(dialog.item.id), {
                 method: 'DELETE',
               })
-              done()
+              doneDialog()
             }}
           >
             <p>
@@ -143,65 +169,7 @@ export function Workflows() {
     </div>
   )
 }
-function Editor({
-  item,
-  close,
-  done,
-}: {
-  item?: Workflow
-  close: () => void
-  done: () => void
-}) {
-  return (
-    <Modal title={item ? 'Edit workflow' : 'New workflow'} close={close}>
-      <ActionForm
-        submit={async (fields) => {
-          const value: unknown = JSON.parse(String(fields.get('spec')))
-          if (!value || Array.isArray(value) || typeof value !== 'object')
-            throw new Error('Enter a workflow spec object.')
-          const spec = value as Record<string, unknown>
-          if (item) {
-            for (const key of Object.keys(item.spec)) {
-              if (!Object.hasOwn(spec, key)) spec[key] = null
-            }
-            await request('/workflows/' + idPath(item.id), {
-              method: 'PATCH',
-              body: { resourceVersion: item.resourceVersion, spec },
-            })
-          } else {
-            await request('/workflows', {
-              method: 'POST',
-              body: { id: String(fields.get('id')).trim(), spec },
-            })
-          }
-          done()
-        }}
-      >
-        <label>
-          Workflow ID
-          <input
-            name="id"
-            defaultValue={item?.id}
-            disabled={!!item}
-            required
-            maxLength={253}
-          />
-        </label>
-        <label>
-          Workflow spec (JSON)
-          <textarea
-            name="spec"
-            className="code-input"
-            rows={14}
-            spellCheck={false}
-            required
-            defaultValue={JSON.stringify(item?.spec ?? initialSpec, null, 2)}
-          />
-        </label>
-      </ActionForm>
-    </Modal>
-  )
-}
+
 function ImportWorkflow({
   close,
   done,
@@ -247,6 +215,7 @@ function ImportWorkflow({
     </Modal>
   )
 }
+
 function exportWorkflow(item: Workflow) {
   const url = URL.createObjectURL(
     new Blob(
@@ -260,6 +229,7 @@ function exportWorkflow(item: Workflow) {
   link.click()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
+
 function LaunchWorkflow({
   item,
   close,

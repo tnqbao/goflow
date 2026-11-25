@@ -25,7 +25,7 @@ func RegisterDashboard(e *echo.Echo, auth *service.AuthService) {
 		return c.Redirect(http.StatusSeeOther, DashboardPath)
 	})
 	e.GET(DashboardPath, func(c echo.Context) error {
-		c.Response().Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'; form-action 'self'")
+		c.Response().Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'; form-action 'self'")
 		return c.HTMLBlob(http.StatusOK, dashboardHTML)
 	}, noStoreWebCache, RequireWebAuth(auth))
 
