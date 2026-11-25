@@ -9,7 +9,7 @@ Self-hosted, Kubernetes-native platform for automating AI video production.
 KubeReel runs as a single Go executable and single container image (`iamqbao/kubereel`) built on Echo (`Controller` → `Service` → `Repository`) with embedded UI and FFmpeg:
 
 - `kubereel serve` — starts the Echo HTTP server, embedded dashboard, and Kubernetes controllers.
-- `kubereel worker` — executes an assigned workflow step (`mock` or official `gemini` text generation) inside a temporary Kubernetes Job.
+- `kubereel worker` — executes an assigned workflow step (`mock`, official `gemini` text generation, or official `fal.ai` Queue API image/video generation) inside a temporary Kubernetes Job.
 - `kubereel render` — executes controlled FFmpeg media operations (`merge`, `trim`, `resize`, `aspect_ratio`, `add_audio`, `normalize`, `render_mp4`) inside an isolated scratch directory without shell execution.
 
 Kubernetes state is managed via three CRDs (`VideoWorkflow`, `VideoRun`, `VideoProvider`) and PVC-backed artifact storage, with no external database or message broker required.
@@ -148,5 +148,5 @@ python3 charts/kubereel/tests/test_chart.py
 ## Current Status & Limitations
 
 - The `mock` provider and FFmpeg produce complete downloadable H.264 MP4 videos end-to-end without external API keys.
-- Official **Google Gemini** (`gemini-4-hydrogen` default via the Interactions API) is supported for `llm` steps using a `VideoProvider` resource and a Kubernetes `Secret` (`secretRef`) — credentials are injected directly into worker Job pods via `secretKeyRef`, endpoints enforce HTTPS + SSRF protection, and uncertain billable submissions transition to `RequiresReview` without automatic retry.
-- `fal.ai` provider integration, authentication, and the `/api/v1` contract are in active development.
+- Official **Google Gemini** (`gemini-4-hydrogen` default via the Interactions API) is supported for `llm` steps and official **fal.ai** (via `https://queue.fal.run`) is supported for `image`, text-to-video, and image-to-video steps using `VideoProvider` resources and Kubernetes `Secret` (`secretRef`) credentials — API keys are injected directly into worker Job pods via `secretKeyRef`, endpoints enforce HTTPS + SSRF protection, `429` rate limits honor `Retry-After` with bounded backoff, and uncertain billable submissions transition to `RequiresReview` without automatic retry.
+- Authentication and the `/api/v1` management contract are in active development.

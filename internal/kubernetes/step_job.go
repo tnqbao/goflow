@@ -208,16 +208,16 @@ func stepJobForStep(runName string, uid types.UID, step executableStep, attempt 
 		attempt,
 		StageWorker,
 		"request.json",
-		stepOutputFile(step.Type),
+		stepOutputFile(step.Type, cfg.ProviderName != ""),
 		cfg,
 	)
 }
 
-func stepOutputArtifactKey(step executableStep, workflowID string) string {
-	return path.Join("workflows", workflowID, stepOutputFile(step.Type))
+func stepOutputArtifactKey(step executableStep, workflowID string, externalProvider bool) string {
+	return path.Join("workflows", workflowID, stepOutputFile(step.Type, externalProvider))
 }
 
-func stepOutputFile(stepType string) string {
+func stepOutputFile(stepType string, externalProvider bool) string {
 	switch stepType {
 	case "llm":
 		return "script.json"
@@ -225,9 +225,19 @@ func stepOutputFile(stepType string) string {
 		return "clip.mp4"
 	case "ffmpeg":
 		return "output.mp4"
+	case "image":
+		return imageOutputFile(externalProvider)
 	default:
 		return "scene.svg"
 	}
+}
+
+func imageOutputFile(externalProvider bool) string {
+	if externalProvider {
+		return "image.png"
+	}
+
+	return "scene.svg"
 }
 
 func buildOwnedStepJob(

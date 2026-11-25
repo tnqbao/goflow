@@ -97,7 +97,7 @@ func (e *StepExecutor) collectAllowedRunArtifacts(run *unstructured.Unstructured
 			return nil, fmt.Errorf("step %q has invalid job identity", step.Name)
 		}
 
-		artifactKey := stepOutputArtifactKey(step, job.Labels["kubereel.io/workflow"])
+		artifactKey := stepOutputArtifactKey(step, job.Labels["kubereel.io/workflow"], jobCfg.ProviderName != "")
 		allowed[artifactKey] = true
 	}
 

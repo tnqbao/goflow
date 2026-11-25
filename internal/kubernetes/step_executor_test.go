@@ -736,3 +736,200 @@ func TestStepExecutorGeminiProviderSecretLimitAndUncertainOutcome(t *testing.T) 
 		t.Fatalf("expected RequiresReview without retry on uncertain submission, got status=%v jobs=%d", got.Object["status"], len(jobs.jobs))
 	}
 }
+
+func TestStepExecutorFalImageToVideoWorkflow(t *testing.T) {
+	ctx := context.Background()
+	steps := []interface{}{
+		map[string]interface{}{
+			"name":        "keyframe",
+			"type":        "image",
+			"providerRef": "fal-main",
+			"model":       "fal-ai/flux/dev",
+		},
+		map[string]interface{}{
+			"name":        "animate",
+			"type":        "video",
+			"providerRef": "fal-main",
+			"model":       "fal-ai/kling-video/v1.6/standard/image-to-video",
+			"dependsOn":   []interface{}{"keyframe"},
+		},
+		map[string]interface{}{
+			"name":      "render",
+			"type":      "ffmpeg",
+			"dependsOn": []interface{}{"animate"},
+			"ffmpeg": map[string]interface{}{
+				"operation":   renderer.OpRenderMP4,
+				"aspectRatio": "16:9",
+			},
+		},
+	}
+
+	run := testVideoRun(steps)
+	run.SetUID(types.UID("aaaa1111-bbbb-2222-cccc-333344445555"))
+	spec := run.Object["spec"].(map[string]interface{})
+	spec["inputs"] = map[string]interface{}{
+		"prompt": map[string]interface{}{"stringValue": "Neon rainy street in Tokyo"},
+	}
+	spec["workflowSnapshot"].(map[string]interface{})["outputs"] = []interface{}{
+		map[string]interface{}{"name": "final-video", "from": "render"},
+	}
+
+	vp := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "kubereel.io/v1alpha1",
+		"kind":       "VideoProvider",
+		"metadata":   map[string]interface{}{"name": "fal-main", "namespace": "test"},
+		"spec": map[string]interface{}{
+			"type":           "fal",
+			"capabilities":   []interface{}{"image", "video"},
+			"models":         []interface{}{"fal-ai/flux/dev", "fal-ai/kling-video/v1.6/standard/image-to-video"},
+			"secretRef":      map[string]interface{}{"name": "fal-creds", "key": "fal-key"},
+			"maxConcurrent":  int64(2),
+			"timeoutSeconds": int64(90),
+		},
+	}}
+
+	dynClient := fake.NewSimpleDynamicClient(runtime.NewScheme(), run, vp)
+	controller, jobs := testStepController(t, run, 4)
+	controller.Runs = dynClient.Resource(VideoRunResource()).Namespace("test")
+	controller.Executor.Runs = controller.Runs
+	controller.Executor.Providers = dynClient.Resource(VideoProviderResource()).Namespace("test")
+
+	// 1. Submit and complete the fal image keyframe step -> image.png.
+	reconcileTimes(t, controller, 2)
+	if len(jobs.jobs) != 1 {
+		t.Fatalf("Jobs after keyframe submit = %d, want 1", len(jobs.jobs))
+	}
+
+	var imageJob *batchv1.Job
+	for _, imageJob = range jobs.jobs {
+	}
+	env := imageJob.Spec.Template.Spec.Containers[0].Env
+	if len(env) != 1 || env[0].Name != executor.EnvProviderAPIKey || env[0].ValueFrom == nil ||
+		env[0].ValueFrom.SecretKeyRef.Name != "fal-creds" || env[0].ValueFrom.SecretKeyRef.Key != "fal-key" {
+		t.Fatalf("expected fal SecretKeyRef env injection, got %+v", env)
+	}
+
+	imgID := imageJob.Labels["kubereel.io/workflow"]
+	imgDir := filepath.ToSlash(filepath.Join("workflows", imgID))
+	pngBytes := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0x00, 0x00, 0x00, 0x0d}
+	if err := controller.Executor.Artifacts.Put(ctx, imgDir+"/image.png", bytes.NewReader(pngBytes)); err != nil {
+		t.Fatal(err)
+	}
+	jobs.finish(imgID, StageWorker, batchv1.JobComplete)
+
+	// 2. Submit and verify the fal image-to-video step automatically receives imageInput -> clip.mp4.
+	reconcileTimes(t, controller, 3)
+	var videoJob *batchv1.Job
+	for _, candidate := range jobs.jobs {
+		if !isJobTerminal(candidate) {
+			videoJob = candidate
+		}
+	}
+	if videoJob == nil {
+		t.Fatal("expected active fal video Job")
+	}
+
+	vidID := videoJob.Labels["kubereel.io/workflow"]
+	vidDir := filepath.ToSlash(filepath.Join("workflows", vidID))
+	reqObj, err := controller.Executor.Artifacts.Open(ctx, vidDir+"/request.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawReq, err := io.ReadAll(reqObj)
+	_ = reqObj.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var vidReq executor.StepRequest
+	if err := json.Unmarshal(rawReq, &vidReq); err != nil {
+		t.Fatal(err)
+	}
+	if vidReq.Provider != executor.ProviderFal || vidReq.Model != "fal-ai/kling-video/v1.6/standard/image-to-video" ||
+		vidReq.ImageInput != imgDir+"/image.png" {
+		t.Fatalf("unexpected fal video StepRequest: %+v", vidReq)
+	}
+
+	if err := controller.Executor.Artifacts.Put(ctx, vidDir+"/clip.mp4", bytes.NewReader(testValidMP4())); err != nil {
+		t.Fatal(err)
+	}
+	jobs.finish(vidID, StageWorker, batchv1.JobComplete)
+
+	// 3. Submit and complete the final FFmpeg render step -> output.mp4.
+	reconcileTimes(t, controller, 3)
+	var renderJob *batchv1.Job
+	for _, candidate := range jobs.jobs {
+		if !isJobTerminal(candidate) {
+			renderJob = candidate
+		}
+	}
+	if renderJob == nil || renderJob.Labels["kubereel.io/stage"] != StageRender {
+		t.Fatalf("expected active render Job, got %+v", renderJob)
+	}
+
+	renderID := renderJob.Labels["kubereel.io/workflow"]
+	renderDir := filepath.ToSlash(filepath.Join("workflows", renderID))
+	if err := controller.Executor.Artifacts.Put(ctx, renderDir+"/output.mp4", bytes.NewReader(testValidMP4())); err != nil {
+		t.Fatal(err)
+	}
+	jobs.finish(renderID, StageRender, batchv1.JobComplete)
+	reconcileTimes(t, controller, 1)
+
+	got, err := controller.Runs.Get(ctx, "sample", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	phase, _, _ := unstructured.NestedString(got.Object, "status", "phase")
+	artifacts, _, _ := unstructured.NestedStringSlice(got.Object, "status", "artifacts")
+	if phase != "Succeeded" || len(artifacts) != 3 {
+		t.Fatalf("final status = %v", got.Object["status"])
+	}
+	if err := controller.Executor.cleanupArtifacts(ctx, got, time.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("cleanupArtifacts = %v", err)
+	}
+}
+
+func TestStepExecutorFalRejectsUnlistedModel(t *testing.T) {
+	steps := []interface{}{
+		map[string]interface{}{
+			"name":        "keyframe",
+			"type":        "image",
+			"providerRef": "fal-main",
+			"model":       "fal-ai/unlisted-model",
+		},
+	}
+
+	run := testVideoRun(steps)
+	run.Object["spec"].(map[string]interface{})["inputs"] = map[string]interface{}{
+		"prompt": map[string]interface{}{"stringValue": "Test prompt"},
+	}
+
+	vp := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "kubereel.io/v1alpha1",
+		"kind":       "VideoProvider",
+		"metadata":   map[string]interface{}{"name": "fal-main", "namespace": "test"},
+		"spec": map[string]interface{}{
+			"type":         "fal",
+			"capabilities": []interface{}{"image"},
+			"models":       []interface{}{"fal-ai/flux/dev"},
+			"secretRef":    map[string]interface{}{"name": "fal-creds", "key": "fal-key"},
+		},
+	}}
+
+	dynClient := fake.NewSimpleDynamicClient(runtime.NewScheme(), run, vp)
+	controller, jobs := testStepController(t, run, 2)
+	controller.Runs = dynClient.Resource(VideoRunResource()).Namespace("test")
+	controller.Executor.Runs = controller.Runs
+	controller.Executor.Providers = dynClient.Resource(VideoProviderResource()).Namespace("test")
+
+	reconcileTimes(t, controller, 2)
+	got, err := controller.Runs.Get(context.Background(), "sample", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	phase, _, _ := unstructured.NestedString(got.Object, "status", "phase")
+	errMsg, _, _ := unstructured.NestedString(got.Object, "status", "error")
+	if phase != "Failed" || len(jobs.jobs) != 0 || !strings.Contains(errMsg, "not listed in VideoProvider models") {
+		t.Fatalf("expected Failed without Job submission, got status=%v jobs=%d", got.Object["status"], len(jobs.jobs))
+	}
+}
