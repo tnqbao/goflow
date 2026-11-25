@@ -5,6 +5,7 @@ go 1.23.3
 require (
 	github.com/a-h/templ v0.3.1001
 	github.com/labstack/echo/v4 v4.13.3
+	golang.org/x/crypto v0.40.0
 	golang.org/x/sys v0.34.0
 	k8s.io/api v0.32.10
 	k8s.io/apimachinery v0.32.10
@@ -42,7 +43,6 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	golang.org/x/crypto v0.40.0 // indirect
 	golang.org/x/net v0.42.0 // indirect
 	golang.org/x/oauth2 v0.23.0 // indirect
 	golang.org/x/term v0.33.0 // indirect

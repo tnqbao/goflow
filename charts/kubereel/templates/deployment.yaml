@@ -59,6 +59,26 @@ spec:
               value: {{ .Values.execution.maxConcurrentJobs | quote }}
             - name: JOB_TTL_SECONDS
               value: {{ .Values.execution.jobTTLSeconds | quote }}
+            - name: AUTH_SESSION_TTL_SECONDS
+              value: {{ printf "%d" (.Values.auth.sessionTTLSeconds | int64) | quote }}
+            {{- if .Values.auth.existingSecret }}
+            - name: AUTH_BOOTSTRAP_USERNAME
+              value: {{ .Values.auth.username | quote }}
+            {{- if .Values.auth.passwordKey }}
+            - name: AUTH_BOOTSTRAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret | quote }}
+                  key: {{ .Values.auth.passwordKey | quote }}
+            {{- end }}
+            {{- if .Values.auth.setupTokenKey }}
+            - name: AUTH_SETUP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret | quote }}
+                  key: {{ .Values.auth.setupTokenKey | quote }}
+            {{- end }}
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080

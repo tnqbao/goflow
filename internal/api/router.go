@@ -4,17 +4,22 @@ package api
 import (
 	"github.com/labstack/echo/v4"
 	"github.com/tnqbao/kubereel/internal/api/controller"
+	"github.com/tnqbao/kubereel/internal/api/middleware"
 	"github.com/tnqbao/kubereel/internal/service"
 )
 
 // Router groups the application services required by HTTP API controllers.
 type Router struct {
+	Auth      *service.AuthService
 	Workflows *service.WorkflowService
 	Providers *service.ProviderService
 }
 
-// Register mounts all API controllers onto e.
+// Register mounts auth and protected management/artifact API controllers onto e.
 func (r Router) Register(e *echo.Echo) {
-	(controller.ProviderController{Service: r.Providers}).Register(e)
-	(controller.WorkflowController{Service: r.Workflows}).Register(e)
+	(controller.AuthController{Service: r.Auth}).Register(e)
+
+	authGuard := middleware.RequireAPIAuth(r.Auth)
+	(controller.ProviderController{Service: r.Providers}).Register(e, authGuard)
+	(controller.WorkflowController{Service: r.Workflows}).Register(e, authGuard)
 }

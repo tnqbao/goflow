@@ -25,10 +25,10 @@ type WorkflowController struct {
 }
 
 // Register mounts workflow API routes onto e.
-func (ctrl WorkflowController) Register(e *echo.Echo) {
-	e.POST("/api/workflows", ctrl.Create)
-	e.GET("/api/workflows/:id", ctrl.Get)
-	e.GET("/api/workflows/:id/artifact", ctrl.DownloadArtifact)
+func (ctrl WorkflowController) Register(e *echo.Echo, middlewares ...echo.MiddlewareFunc) {
+	e.POST("/api/workflows", ctrl.Create, middlewares...)
+	e.GET("/api/workflows/:id", ctrl.Get, middlewares...)
+	e.GET("/api/workflows/:id/artifact", ctrl.DownloadArtifact, middlewares...)
 }
 
 // Create validates the HTTP payload and delegates workflow creation to WorkflowService.

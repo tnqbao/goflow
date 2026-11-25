@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/labstack/echo/v4"
+	"github.com/tnqbao/kubereel/internal/config"
 	"github.com/tnqbao/kubereel/internal/database"
 	"github.com/tnqbao/kubereel/internal/provider"
 	"github.com/tnqbao/kubereel/internal/repository"
@@ -34,23 +35,47 @@ func TestWorkflowEndpoints(t *testing.T) {
 	}
 	defer artifacts.Close()
 
+	authSvc := service.NewAuthService(repository.NewAuthRepository(db), config.Defaults().Auth)
 	providerSvc := service.NewProviderService(provider.NewManager())
 	workflowSvc := service.NewWorkflowService(repository.NewWorkflowRepository(db), artifacts, providerSvc)
 
 	server := echo.New()
 	(Router{
+		Auth:      authSvc,
 		Workflows: workflowSvc,
 		Providers: providerSvc,
 	}).Register(server)
 
+	unauthProviders := httptest.NewRecorder()
+	server.ServeHTTP(unauthProviders, httptest.NewRequest(http.MethodGet, "/api/providers", nil))
+	if unauthProviders.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated provider list: %d", unauthProviders.Code)
+	}
+
+	issued, err := authSvc.Setup(context.Background(), "admin", "workflow-test-password-123", "", repository.TokenKindAPIToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authedReq := func(method, target, body string) *http.Request {
+		var reader *strings.Reader
+		if body != "" {
+			reader = strings.NewReader(body)
+		} else {
+			reader = strings.NewReader("")
+		}
+		req := httptest.NewRequest(method, target, reader)
+		req.Header.Set("Authorization", "Bearer "+issued.Token)
+		return req
+	}
+
 	providersResp := httptest.NewRecorder()
-	server.ServeHTTP(providersResp, httptest.NewRequest(http.MethodGet, "/api/providers", nil))
+	server.ServeHTTP(providersResp, authedReq(http.MethodGet, "/api/providers", ""))
 	if providersResp.Code != http.StatusOK || strings.TrimSpace(providersResp.Body.String()) != `[{"id":"mock","available":true}]` {
 		t.Fatalf("provider list: %d %s", providersResp.Code, providersResp.Body.String())
 	}
 
 	createResp := httptest.NewRecorder()
-	server.ServeHTTP(createResp, httptest.NewRequest(http.MethodPost, "/api/workflows", strings.NewReader(`{"prompt":"hello"}`)))
+	server.ServeHTTP(createResp, authedReq(http.MethodPost, "/api/workflows", `{"prompt":"hello"}`))
 	if createResp.Code != http.StatusAccepted {
 		t.Fatalf("create: %d %s", createResp.Code, createResp.Body.String())
 	}
@@ -64,13 +89,13 @@ func TestWorkflowEndpoints(t *testing.T) {
 	}
 
 	getResp := httptest.NewRecorder()
-	server.ServeHTTP(getResp, httptest.NewRequest(http.MethodGet, "/api/workflows/"+created.ID, nil))
+	server.ServeHTTP(getResp, authedReq(http.MethodGet, "/api/workflows/"+created.ID, ""))
 	if getResp.Code != http.StatusOK {
 		t.Fatalf("get: %d", getResp.Code)
 	}
 
 	pendingArtifactResp := httptest.NewRecorder()
-	server.ServeHTTP(pendingArtifactResp, httptest.NewRequest(http.MethodGet, "/api/workflows/"+created.ID+"/artifact", nil))
+	server.ServeHTTP(pendingArtifactResp, authedReq(http.MethodGet, "/api/workflows/"+created.ID+"/artifact", ""))
 	if pendingArtifactResp.Code != http.StatusNotFound {
 		t.Fatalf("pending artifact: %d", pendingArtifactResp.Code)
 	}
@@ -91,13 +116,19 @@ func TestWorkflowEndpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	unauthArtifact := httptest.NewRecorder()
+	server.ServeHTTP(unauthArtifact, httptest.NewRequest(http.MethodGet, "/api/workflows/"+created.ID+"/artifact", nil))
+	if unauthArtifact.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated artifact download: %d", unauthArtifact.Code)
+	}
+
 	artifactResp := httptest.NewRecorder()
-	server.ServeHTTP(artifactResp, httptest.NewRequest(http.MethodGet, "/api/workflows/"+created.ID+"/artifact", nil))
+	server.ServeHTTP(artifactResp, authedReq(http.MethodGet, "/api/workflows/"+created.ID+"/artifact", ""))
 	if artifactResp.Code != http.StatusOK || artifactResp.Header().Get("Content-Type") != "video/mp4" || artifactResp.Body.String() != string(mp4Stub) {
 		t.Fatalf("artifact: %d %s %q", artifactResp.Code, artifactResp.Header().Get("Content-Type"), artifactResp.Body.String())
 	}
 
-	rangeReq := httptest.NewRequest(http.MethodGet, "/api/workflows/"+created.ID+"/artifact", nil)
+	rangeReq := authedReq(http.MethodGet, "/api/workflows/"+created.ID+"/artifact", "")
 	rangeReq.Header.Set("Range", "bytes=4-7")
 	rangeResp := httptest.NewRecorder()
 	server.ServeHTTP(rangeResp, rangeReq)
@@ -118,7 +149,7 @@ func TestWorkflowEndpoints(t *testing.T) {
 	}
 
 	blockedResp := httptest.NewRecorder()
-	server.ServeHTTP(blockedResp, httptest.NewRequest(http.MethodGet, "/api/workflows/"+created.ID+"/artifact", nil))
+	server.ServeHTTP(blockedResp, authedReq(http.MethodGet, "/api/workflows/"+created.ID+"/artifact", ""))
 	if blockedResp.Code != http.StatusNotFound {
 		t.Fatalf("symlink artifact: %d", blockedResp.Code)
 	}
@@ -131,7 +162,7 @@ func TestWorkflowEndpoints(t *testing.T) {
 	}
 	for _, payload := range invalidPayloads {
 		resp := httptest.NewRecorder()
-		server.ServeHTTP(resp, httptest.NewRequest(http.MethodPost, "/api/workflows", strings.NewReader(payload)))
+		server.ServeHTTP(resp, authedReq(http.MethodPost, "/api/workflows", payload))
 		if resp.Code != http.StatusBadRequest {
 			t.Fatalf("invalid request %s: %d", payload, resp.Code)
 		}

@@ -14,8 +14,6 @@ KubeReel runs as a single Go executable and single container image (`iamqbao/kub
 
 Kubernetes state is managed via three CRDs (`VideoWorkflow`, `VideoRun`, `VideoProvider`) and PVC-backed artifact storage, with no external database or message broker required.
 
-> **Security notice:** Authentication is not yet implemented. Run KubeReel only on a trusted network and access it via local port-forwarding; do not expose the service or Ingress publicly.
-
 ---
 
 ## Quick Start — Kubernetes (Helm via Docker Hub)
@@ -35,17 +33,24 @@ Forward the service port locally:
 kubectl -n kubereel port-forward service/kubereel-kubereel 8080:8080
 ```
 
-- **Web UI:** Open `http://localhost:8080/workflows` to run the built-in Mock workflow and preview/download the rendered MP4.
-- **Health checks:** `http://localhost:8080/healthz` and `http://localhost:8080/readyz`.
-- **API test:**
+- **Web UI:** Open `http://localhost:8080`, complete the one-time **Initial Administrator Setup** (`/setup`), then run the built-in Mock workflow at `/workflows` and preview/download the rendered MP4.
+- **Health checks:** `http://localhost:8080/healthz` and `http://localhost:8080/readyz` (unauthenticated probes).
+- **API authentication & workflow test:**
 
 ```sh
+# 1. One-time initial administrator setup (or POST /api/v1/auth/login afterwards)
+TOKEN=$(curl -sS -X POST http://localhost:8080/api/v1/auth/setup \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"replace-with-strong-password"}' | jq -r .token)
+
+# 2. Submit and download a Mock MP4 workflow using Bearer authentication
 curl -i -X POST http://localhost:8080/api/workflows \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"A quiet lake"}'
 
-curl http://localhost:8080/api/workflows/<WORKFLOW_ID>
-curl -o mock-video.mp4 http://localhost:8080/api/workflows/<WORKFLOW_ID>/artifact
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/workflows/<WORKFLOW_ID>
+curl -H "Authorization: Bearer $TOKEN" -o mock-video.mp4 http://localhost:8080/api/workflows/<WORKFLOW_ID>/artifact
 ```
 
 - **Multi-step DAG (`VideoWorkflow` + `VideoRun`):**
@@ -68,6 +73,8 @@ kubectl -n kubereel get videorun horror-shorts-demo -w
 | `storage.retentionSeconds` | `0` | Expiry for completed `VideoRun` artifacts (`0` disables) |
 | `execution.maxConcurrentJobs` | `5` | Max concurrent Kubernetes Jobs |
 | `execution.jobTTLSeconds` | `86400` | Finished Job retention window (24h) |
+| `auth.sessionTTLSeconds` | `86400` | Browser session lifetime in seconds (24h) |
+| `auth.existingSecret` | `""` | Optional Kubernetes Secret for headless admin bootstrap |
 | `ingress.enabled` | `false` | Optional Ingress (requires `ingress.host`) |
 
 ### Upgrading & CRDs
@@ -149,4 +156,5 @@ python3 charts/kubereel/tests/test_chart.py
 
 - The `mock` provider and FFmpeg produce complete downloadable H.264 MP4 videos end-to-end without external API keys.
 - Official **Google Gemini** (`gemini-4-hydrogen` default via the Interactions API) is supported for `llm` steps and official **fal.ai** (via `https://queue.fal.run`) is supported for `image`, text-to-video, and image-to-video steps using `VideoProvider` resources and Kubernetes `Secret` (`secretRef`) credentials — API keys are injected directly into worker Job pods via `secretKeyRef`, endpoints enforce HTTPS + SSRF protection, `429` rate limits honor `Retry-After` with bounded backoff, and uncertain billable submissions transition to `RequiresReview` without automatic retry.
-- Authentication and the `/api/v1` management contract are in active development.
+- Built-in **Authentication** protects the Web Dashboard, management REST APIs, and artifact downloads with one-time initial administrator setup (`/setup` & `/api/v1/auth/setup`), `bcrypt` password hashing, `HttpOnly`/`SameSite=Lax` browser sessions with CSRF protection, SHA-256-hashed personal Bearer API tokens (`/api/v1/auth/tokens`), and per-IP login rate limiting.
+- The `/api/v1` provider, workflow, execution, and artifact management endpoints are in active development.

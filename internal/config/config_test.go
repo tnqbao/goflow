@@ -94,6 +94,27 @@ func TestParseJobTTL(t *testing.T) {
 	}
 }
 
+func TestAuthConfiguration(t *testing.T) {
+	clearConfigEnv(t)
+
+	t.Setenv(EnvAuthSessionTTLSeconds, "30")
+	if _, err := Load(); err == nil {
+		t.Fatal("accepted session TTL below 60 seconds")
+	}
+
+	t.Setenv(EnvAuthSessionTTLSeconds, "3600")
+	t.Setenv(EnvAuthBootstrapPassword, "super-secret-bootstrap-pass")
+	t.Setenv(EnvAuthSetupToken, "setup-tok-123")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() auth config error = %v", err)
+	}
+	if cfg.Auth.BootstrapUsername != "admin" || cfg.Auth.SetupToken != "setup-tok-123" {
+		t.Fatalf("unexpected auth config = %+v", cfg.Auth)
+	}
+}
+
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
 
@@ -110,6 +131,10 @@ func clearConfigEnv(t *testing.T) {
 		EnvSharedStorage,
 		EnvMaxConcurrentJobs,
 		EnvJobTTLSeconds,
+		EnvAuthSessionTTLSeconds,
+		EnvAuthBootstrapUsername,
+		EnvAuthBootstrapPassword,
+		EnvAuthSetupToken,
 	} {
 		t.Setenv(envName, "")
 	}

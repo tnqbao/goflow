@@ -13,8 +13,8 @@ type ProviderController struct {
 }
 
 // Register mounts provider routes onto e.
-func (ctrl ProviderController) Register(e *echo.Echo) {
-	e.GET("/api/providers", ctrl.List)
+func (ctrl ProviderController) Register(e *echo.Echo, middlewares ...echo.MiddlewareFunc) {
+	e.GET("/api/providers", ctrl.List, middlewares...)
 }
 
 // List returns configured providers and their current availability.

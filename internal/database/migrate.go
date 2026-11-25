@@ -24,6 +24,30 @@ var schemaMigrations = []migration{
 			updated_at TEXT NOT NULL
 		)`,
 	},
+	{
+		version: 2,
+		sql: `CREATE TABLE users (
+			id TEXT PRIMARY KEY,
+			singleton INTEGER NOT NULL DEFAULT 1 CHECK(singleton = 1) UNIQUE,
+			username TEXT NOT NULL UNIQUE,
+			password_hash TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+		CREATE TABLE auth_tokens (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			name TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL CHECK(kind IN ('session', 'api_token')),
+			token_hash TEXT NOT NULL UNIQUE,
+			csrf_token TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			last_used_at TEXT NOT NULL
+		);
+		CREATE INDEX idx_auth_tokens_user_id ON auth_tokens(user_id);
+		CREATE INDEX idx_auth_tokens_expires_at ON auth_tokens(expires_at);`,
+	},
 }
 
 // runMigrations applies migrations in order, atomically recording each version with its SQL.

@@ -17,6 +17,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/tnqbao/kubereel/internal/api"
 	"github.com/tnqbao/kubereel/internal/api/controller"
+	"github.com/tnqbao/kubereel/internal/api/middleware"
 	"github.com/tnqbao/kubereel/internal/config"
 	"github.com/tnqbao/kubereel/internal/database"
 	"github.com/tnqbao/kubereel/internal/executor"
@@ -131,6 +132,11 @@ func runServer(ctx context.Context, cfg config.Config) (runErr error) {
 		runErr = errors.Join(runErr, artifacts.Close())
 	}()
 
+	authSvc := service.NewAuthService(repository.NewAuthRepository(db), cfg.Auth)
+	if err := authSvc.Bootstrap(ctx); err != nil {
+		return fmt.Errorf("bootstrap authentication: %w", err)
+	}
+
 	providerSvc := service.NewProviderService(provider.NewManager())
 	workflowRepo := repository.NewWorkflowRepository(db)
 	workflowSvc := service.NewWorkflowService(workflowRepo, artifacts, providerSvc)
@@ -141,12 +147,13 @@ func runServer(ctx context.Context, cfg config.Config) (runErr error) {
 	}
 
 	router := newBaseEcho(db)
+	(web.AuthController{Service: authSvc}).Register(router)
 	if operator != nil {
-		registerClusterControllers(router, workflowSvc, providerSvc)
+		registerClusterControllers(router, authSvc, workflowSvc, providerSvc)
 		stopOperator := startBackgroundController(ctx, operator)
 		defer stopOperator()
 	} else {
-		registerStandaloneFallback(router)
+		registerStandaloneControllers(router, authSvc)
 	}
 
 	server := &http.Server{
@@ -161,21 +168,27 @@ func runServer(ctx context.Context, cfg config.Config) (runErr error) {
 
 func registerClusterControllers(
 	e *echo.Echo,
+	auth *service.AuthService,
 	workflows *service.WorkflowService,
 	providers *service.ProviderService,
 ) {
 	(api.Router{
+		Auth:      auth,
 		Workflows: workflows,
 		Providers: providers,
 	}).Register(e)
 
-	(web.WorkflowController{Service: workflows}).Register(e)
+	(web.WorkflowController{
+		Auth:    auth,
+		Service: workflows,
+	}).Register(e)
 }
 
-func registerStandaloneFallback(e *echo.Echo) {
+func registerStandaloneControllers(e *echo.Echo, auth *service.AuthService) {
+	(controller.AuthController{Service: auth}).Register(e)
 	e.GET("/workflows", func(c echo.Context) error {
 		return c.String(http.StatusServiceUnavailable, "Mock workflows require Kubernetes mode\n")
-	})
+	}, web.RequireWebAuth(auth))
 }
 
 func startBackgroundController(ctx context.Context, operator *kubernetes.Controller) func() {
@@ -251,6 +264,7 @@ func newBaseEcho(db *sql.DB) *echo.Echo {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
+	e.Use(middleware.SecurityHeaders())
 
 	(controller.SystemController{DB: db}).Register(e)
 	return e

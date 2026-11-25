@@ -511,16 +511,60 @@ done
 if [ -z "$port" ]; then printf 'port-forward did not become ready\n' >&2; exit 1; fi
 
 python3 - "$port" "$workdir/workflow-id" <<'PY'
-import json, sys, time, urllib.error, urllib.request
+import http.cookiejar, json, re, sys, time, urllib.error, urllib.parse, urllib.request
 
 base = f'http://127.0.0.1:{sys.argv[1]}'
-with urllib.request.urlopen(base + '/api/providers', timeout=5) as response:
+
+# 1. Management API must reject unauthenticated access prior to setup.
+try:
+    urllib.request.urlopen(base + '/api/providers', timeout=5)
+except urllib.error.HTTPError as error:
+    if error.code != 401:
+        raise
+else:
+    raise RuntimeError('unauthenticated /api/providers succeeded before setup')
+
+# 2. Complete one-time initial administrator setup via REST API; verify duplicate setup returns 409.
+setup_req = urllib.request.Request(
+    base + '/api/v1/auth/setup',
+    data=b'{"username":"admin","password":"kubereel-e2e-password-123"}',
+    headers={'Content-Type': 'application/json'},
+    method='POST',
+)
+with urllib.request.urlopen(setup_req, timeout=5) as response:
+    setup_payload = json.load(response)
+api_token = setup_payload['token']
+auth_headers = {'Authorization': f'Bearer {api_token}'}
+
+dup_setup = urllib.request.Request(
+    base + '/api/v1/auth/setup',
+    data=b'{"username":"admin2","password":"kubereel-e2e-password-123"}',
+    headers={'Content-Type': 'application/json'},
+    method='POST',
+)
+try:
+    urllib.request.urlopen(dup_setup, timeout=5)
+except urllib.error.HTTPError as error:
+    if error.code != 409:
+        raise
+else:
+    raise RuntimeError('duplicate setup succeeded')
+
+# 3. Verify authenticated API workflow execution and protected MP4 artifact download.
+providers_req = urllib.request.Request(base + '/api/providers', headers=auth_headers)
+with urllib.request.urlopen(providers_req, timeout=5) as response:
     providers = json.load(response)
 if not any(p['id'] == 'mock' and p['available'] for p in providers):
     raise RuntimeError('Mock provider is unavailable')
 if len(providers) != 1:
     raise RuntimeError('unexpected provider in registry')
-blocked = urllib.request.Request(base + '/api/workflows', data=b'{"prompt":"test","provider":"unknown"}', headers={'Content-Type': 'application/json'}, method='POST')
+
+blocked = urllib.request.Request(
+    base + '/api/workflows',
+    data=b'{"prompt":"test","provider":"unknown"}',
+    headers={**auth_headers, 'Content-Type': 'application/json'},
+    method='POST',
+)
 try:
     urllib.request.urlopen(blocked, timeout=5)
 except urllib.error.HTTPError as error:
@@ -528,7 +572,13 @@ except urllib.error.HTTPError as error:
         raise
 else:
     raise RuntimeError('unavailable provider was accepted')
-request = urllib.request.Request(base + '/api/workflows', data=b'{"prompt":"KubeReel mock workflow","provider":"mock"}', headers={'Content-Type': 'application/json'}, method='POST')
+
+request = urllib.request.Request(
+    base + '/api/workflows',
+    data=b'{"prompt":"KubeReel mock workflow","provider":"mock"}',
+    headers={**auth_headers, 'Content-Type': 'application/json'},
+    method='POST',
+)
 with urllib.request.urlopen(request, timeout=5) as response:
     workflow = json.load(response)
 workflow_id = workflow['id']
@@ -536,42 +586,84 @@ with open(sys.argv[2], 'w', encoding='utf-8') as output:
     output.write(workflow_id)
 deadline = time.monotonic() + 120
 while time.monotonic() < deadline:
-    with urllib.request.urlopen(base + '/api/workflows/' + workflow_id, timeout=5) as response:
+    status_req = urllib.request.Request(base + '/api/workflows/' + workflow_id, headers=auth_headers)
+    with urllib.request.urlopen(status_req, timeout=5) as response:
         workflow = json.load(response)
     if workflow['status'] == 'failed':
         raise RuntimeError(workflow.get('error', 'workflow failed'))
     if workflow['status'] == 'succeeded':
-        with urllib.request.urlopen(base + '/api/workflows/' + workflow_id + '/artifact', timeout=5) as response:
+        try:
+            urllib.request.urlopen(base + '/api/workflows/' + workflow_id + '/artifact', timeout=5)
+        except urllib.error.HTTPError as error:
+            if error.code != 401:
+                raise
+        else:
+            raise RuntimeError('unauthenticated artifact download succeeded')
+
+        dl_req = urllib.request.Request(base + '/api/workflows/' + workflow_id + '/artifact', headers=auth_headers)
+        with urllib.request.urlopen(dl_req, timeout=5) as response:
             content_type = response.headers.get('Content-Type', '')
             artifact = response.read()
         if content_type != 'video/mp4' or len(artifact) < 24 or artifact[4:8] != b'ftyp':
             raise RuntimeError(f'unexpected MP4 artifact: type={content_type}, len={len(artifact)}')
-        print('Mock workflow and MP4 artifact verified')
+        print('Mock workflow and protected MP4 artifact verified')
         break
     time.sleep(2)
 else:
     raise RuntimeError('workflow timed out')
 
-with urllib.request.urlopen(base + '/workflows', timeout=5) as response:
-    if b'Run mock workflow' not in response.read():
-        raise RuntimeError('mock workflow form missing')
-form = urllib.request.Request(base + '/workflows', data=b'prompt=UI+mock+workflow', headers={'Content-Type': 'application/x-www-form-urlencoded'}, method='POST')
-with urllib.request.urlopen(form, timeout=5) as response:
+# 4. Sign into the Web UI with session cookie + CSRF token and run a UI workflow.
+jar = http.cookiejar.CookieJar()
+browser = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+login_data = urllib.parse.urlencode({
+    'username': 'admin',
+    'password': 'kubereel-e2e-password-123',
+    'next': '/workflows',
+}).encode('utf-8')
+login_req = urllib.request.Request(
+    base + '/login',
+    data=login_data,
+    headers={'Content-Type': 'application/x-www-form-urlencoded'},
+    method='POST',
+)
+with browser.open(login_req, timeout=5) as response:
+    form_html = response.read().decode('utf-8')
+    if 'Run mock workflow' not in form_html:
+        raise RuntimeError('mock workflow form missing after login')
+
+csrf_match = re.search(r'name="csrf_token"\s+value="([^"]+)"', form_html)
+if not csrf_match:
+    raise RuntimeError('missing csrf_token in workflow form')
+csrf_token = csrf_match.group(1)
+
+form_body = urllib.parse.urlencode({
+    'prompt': 'UI mock workflow',
+    'csrf_token': csrf_token,
+}).encode('utf-8')
+form = urllib.request.Request(
+    base + '/workflows',
+    data=form_body,
+    headers={'Content-Type': 'application/x-www-form-urlencoded'},
+    method='POST',
+)
+with browser.open(form, timeout=5) as response:
     ui_id = response.geturl().rsplit('/', 1)[-1]
     if b'Workflow status' not in response.read():
         raise RuntimeError('mock workflow status page missing')
 deadline = time.monotonic() + 120
 while time.monotonic() < deadline:
-    with urllib.request.urlopen(base + '/api/workflows/' + ui_id, timeout=5) as response:
+    ui_status_req = urllib.request.Request(base + '/api/workflows/' + ui_id, headers=auth_headers)
+    with urllib.request.urlopen(ui_status_req, timeout=5) as response:
         workflow = json.load(response)
     if workflow['status'] == 'failed':
         raise RuntimeError(workflow.get('error', 'UI workflow failed'))
     if workflow['status'] == 'succeeded':
-        with urllib.request.urlopen(base + '/workflows/' + ui_id, timeout=5) as response:
+        with browser.open(base + '/workflows/' + ui_id, timeout=5) as response:
             body = response.read()
             if b'Download mock MP4' not in body or b'<video' not in body:
                 raise RuntimeError('completed UI workflow has no MP4 player or download link')
-        print('Mock workflow UI verified')
+        print('Authenticated Mock workflow UI verified')
         break
     time.sleep(2)
 else:

@@ -104,7 +104,8 @@ func TestMigrations(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE name = 'rolled_back'`).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
-	if versions != 2 || tables != 0 {
-		t.Errorf("versions = %d, rolled back tables = %d; want 2, 0", versions, tables)
+	wantVersions := len(schemaMigrations) + 1
+	if versions != wantVersions || tables != 0 {
+		t.Errorf("versions = %d, rolled back tables = %d; want %d, 0", versions, tables, wantVersions)
 	}
 }

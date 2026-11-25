@@ -17,6 +17,9 @@ import (
 	"time"
 
 	"github.com/tnqbao/kubereel/internal/config"
+	"github.com/tnqbao/kubereel/internal/repository"
+	"github.com/tnqbao/kubereel/internal/service"
+	"github.com/tnqbao/kubereel/internal/web"
 )
 
 func TestBaseRoutes(t *testing.T) {
@@ -421,6 +424,40 @@ func TestReadinessDatabaseFailure(t *testing.T) {
 		if recorder.Code != tt.status {
 			t.Errorf("%s status = %d, want %d", tt.path, recorder.Code, tt.status)
 		}
+	}
+}
+
+func TestStandaloneServerRequiresSetupAndAuthentication(t *testing.T) {
+	db := openTestDatabase(t)
+	authSvc := service.NewAuthService(repository.NewAuthRepository(db), config.Defaults().Auth)
+
+	router := newBaseEcho(db)
+	(web.AuthController{Service: authSvc}).Register(router)
+	registerStandaloneControllers(router, authSvc)
+
+	uninit := httptest.NewRecorder()
+	router.ServeHTTP(uninit, httptest.NewRequest(http.MethodGet, "/workflows", nil))
+	if uninit.Code != http.StatusSeeOther || uninit.Header().Get("Location") != "/setup" {
+		t.Fatalf("standalone /workflows before setup = %d %q", uninit.Code, uninit.Header().Get("Location"))
+	}
+
+	issued, err := authSvc.Setup(context.Background(), "admin", "standalone-password-123", "", repository.TokenKindSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unauth := httptest.NewRecorder()
+	router.ServeHTTP(unauth, httptest.NewRequest(http.MethodGet, "/workflows", nil))
+	if unauth.Code != http.StatusSeeOther || !strings.HasPrefix(unauth.Header().Get("Location"), "/login") {
+		t.Fatalf("standalone /workflows without session = %d %q", unauth.Code, unauth.Header().Get("Location"))
+	}
+
+	authedReq := httptest.NewRequest(http.MethodGet, "/workflows", nil)
+	authedReq.AddCookie(&http.Cookie{Name: service.SessionCookieName, Value: issued.Token})
+	authed := httptest.NewRecorder()
+	router.ServeHTTP(authed, authedReq)
+	if authed.Code != http.StatusServiceUnavailable {
+		t.Fatalf("authenticated standalone /workflows = %d, want 503", authed.Code)
 	}
 }
 
