@@ -1,0 +1,64 @@
+:root {
+	font-family: system-ui, sans-serif;
+	color: #262b29;
+	background: #f8f8f5;
+	line-height: 1.5;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+a { color: inherit; }
+
+:focus-visible {
+	outline: 3px solid #377969;
+	outline-offset: 3px;
+}
+
+.skip-link {
+	position: absolute;
+	top: -5rem;
+	left: 1rem;
+	z-index: 1;
+	padding: .6rem 1rem;
+	background: #fff;
+}
+.skip-link:focus { top: 1rem; }
+
+.app-shell { display: flex; min-height: 100vh; }
+.sidebar {
+	width: 15rem;
+	flex: none;
+	padding: 2rem 1.5rem;
+	background: #f0f1eb;
+	border-right: 1px solid #e2e5dd;
+}
+.brand { font-size: 1.5rem; font-weight: 750; letter-spacing: -.06em; text-decoration: none; }
+.brand span { color: #5d8e76; }
+.sidebar-label, .eyebrow {
+	margin: 3.5rem 0 .75rem;
+	color: #65716a;
+	font-size: .7rem;
+	font-weight: 700;
+	letter-spacing: .1em;
+	text-transform: uppercase;
+}
+.sidebar-item { display: block; padding: .7rem .85rem; border-radius: .6rem; font-weight: 650; text-decoration: none; }
+.main-content { width: 100%; max-width: 76rem; margin: 0 auto; padding: 4rem clamp(1.5rem, 5vw, 5rem); }
+.page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.eyebrow { margin: 0 0 .5rem; }
+h1 { margin: 0; font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -.05em; line-height: 1.1; }
+.page-description { margin: .75rem 0 0; color: #626e66; }
+
+@media (max-width: 640px) {
+	.app-shell { display: block; }
+	.sidebar { width: auto; padding: 1.25rem 1.5rem; border-right: 0; border-bottom: 1px solid #e2e5dd; }
+	.sidebar-label { margin-top: 1.5rem; }
+	.main-content { padding-top: 2.5rem; }
+	.page-header { flex-wrap: wrap; }
+}
+
+.sidebar-item[aria-current="page"] { background: #e2e8df; }
+.mock-button { padding: .7rem 1rem; border: 0; border-radius: .6rem; background: #315f4a; color: #fff; font: inherit; font-weight: 650; cursor: pointer; }
+.mock-form { display: grid; gap: .75rem; max-width: 40rem; }
+.mock-form textarea { width: 100%; padding: .75rem; border: 1px solid #a5b0a3; border-radius: .6rem; font: inherit; resize: vertical; }
+.mock-form button { justify-self: start; }

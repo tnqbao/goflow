@@ -1,0 +1,32 @@
+package web
+
+templ Layout(title string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title } · KubeReel</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+		</head>
+		<body>
+			<a class="skip-link" href="#main-content">Skip to content</a>
+			<div class="app-shell">
+				<aside class="sidebar" aria-label="Workspace">
+					<a class="brand" href="/" aria-label="KubeReel home">KubeReel<span aria-hidden="true">.</span></a>
+					<p class="sidebar-label">Workspace</p>
+					<nav aria-label="Main navigation">
+						if title == "Mock workflow" {
+							<a class="sidebar-item" href="/workflows" aria-current="page">Mock workflow</a>
+						} else {
+							<a class="sidebar-item" href="/workflows">Mock workflow</a>
+						}
+					</nav>
+				</aside>
+				<main id="main-content" class="main-content" tabindex="-1">
+					{ children... }
+				</main>
+			</div>
+		</body>
+	</html>
+}

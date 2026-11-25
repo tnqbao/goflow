@@ -1,0 +1,12 @@
+services:
+  kubereel:
+    build: .
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - kubereel-data:/data
+    command: ["serve"]
+    restart: unless-stopped
+
+volumes:
+  kubereel-data:

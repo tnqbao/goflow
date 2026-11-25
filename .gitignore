@@ -1,0 +1,11 @@
+# Local binaries and test output
+/bin/
+/kubereel
+*.test
+coverage.out
+
+# Local data
+/data/
+*.db
+*.db-shm
+*.db-wal

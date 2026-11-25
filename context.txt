@@ -1,0 +1,57 @@
+KubeReel — bàn giao ngữ cảnh
+Ngày: 2026-11-25
+Repository: /home/bao/Workspace/project/goflow
+Remote: git@github.com:tnqbao/kubereel.git
+Branch phát triển: develop
+
+1. Chỉ dẫn bắt buộc
+- Đọc đầy đủ SPEC.md và AGENTS.md trước khi thực hiện bất kỳ task nào. SPEC.md là nguồn kiến trúc và sản phẩm có thẩm quyền duy nhất.
+- Dự án GoFlow đã chấm dứt. Không khôi phục Google Flow, browser automation, OAuth/session/cookie cũ hay các quyết định GoFlow trước đây.
+- Mỗi yêu cầu tương ứng một task; chỉ làm task được yêu cầu, không tự động triển khai roadmap tương lai. Dừng sau task.
+- Giữ nguyên thay đổi không liên quan. Hiện .idea/ và AGENTS.md là untracked; không tự ý xóa, sửa hay commit chúng.
+- Clean code Go: hàm tập trung, guard clause, không nested if, không code thừa/giải pháp tạm, xử lý lỗi có context, dùng context cancellation, tránh race và goroutine leak.
+- Sau task: chạy kiểm tra phù hợp, review diff, commit atomic và push origin/develop, không force push. AGENTS.md quy định các tiền tố #feat/, #fix/, #refactor/, #test/, #docs/, #chore/.
+- Không đánh dấu task hoàn tất nếu còn thiếu yêu cầu. Không gọi API trả phí khi chưa được cho phép.
+
+2. Sản phẩm và kiến trúc
+- KubeReel là nền tảng Kubernetes-native tạo video AI theo mô hình BYOK, chỉ dùng API chính thức.
+- Modular monolith: một Go executable, một Docker image, một container control plane thường trực; Jobs Kubernetes tạm dùng lại image đó.
+- Các command: kubereel serve, kubereel worker, kubereel render. Frontend được embed; Helm mặc định Kubernetes mode, PVC, Mock Provider.
+- Không database/broker/browser runtime bên ngoài bắt buộc; không dùng Google Flow. Xem SPEC.md để biết toàn bộ yêu cầu.
+
+3. Trạng thái roadmap thực tế
+- F01–F15 đã triển khai trước đợt bàn giao này. Các commit gần nhất:
+  F13 61430bf #feat/execute-videorun-jobs
+  F14 85208c4 #feat/retry-and-cancel-videoruns
+  F15 db75e05 #feat/recover-videorun-jobs
+- F16 chưa hoàn chỉnh, dù một số phần đã được commit và push:
+  674dab1 #feat/add-artifact-storage-foundation
+  57414d7 #feat/expire-completed-run-artifacts
+  Có PVC filesystem storage, giới hạn kích thước, ghi nguyên tử, chặn path traversal/symlink và cleanup định kỳ cho artifact đã xuất bản của VideoRun thành công có completedAt. Retention mặc định tắt.
+  Còn thiếu: cleanup tự động cho run lỗi/hủy, run cũ không có completedAt và workflow legacy; download chưa có xác thực/bảo vệ, phụ thuộc F23. Không công khai endpoint artifact trước khi có xác thực. Không được báo F16 hoàn tất.
+- F17 đã triển khai và push: 22184eff0c3ec7973ff8746b623e26a416bd7930 #feat/implement-provider-interfaces. Contract ở internal/provider/provider.go: text/image/video/audio, handle, trạng thái, optional cancellation và ErrSubmissionUncertain. Không tự động retry khi submit có kết quả không chắc chắn.
+- F18 đã triển khai adapter Mock và push: b2dd01bf598cc546120a0b2c2ecb9a719a846ad9 #feat/implement-mock-provider. Adapter tạo text, ảnh SVG, clip MP4 mẫu bằng FFmpeg; mô phỏng latency, failure, rate limiting, status và cancellation. Không dùng mạng/API trả phí.
+  Giới hạn quan trọng: các handle bất đồng bộ chỉ sống trong bộ nhớ của một adapter instance, không tồn tại qua restart; giới hạn 1024 request và phải Forget request terminal. Text/video chưa được nối với workflow; workflow hiện tại chỉ tạo ảnh SVG. Không tuyên bố đã có workflow MP4 hoàn chỉnh. Cần giải quyết an toàn lifetime/recovery khi nối workflow sau này.
+- F19 — FFmpeg rendering — chưa bắt đầu. F20 — complete Mock Provider end-to-end workflow — chưa bắt đầu. Gemini không nên bắt đầu task mới nếu user chưa yêu cầu.
+
+4. Cấu trúc cần đọc
+- SPEC.md, AGENTS.md, README.md: quy tắc, roadmap và giới hạn hiện tại.
+- main.go, runtime.go: command và lifecycle control plane/worker.
+- internal/kubernetes/: controller, reconciliation, Job, retry/cancel, recovery, cleanup.
+- internal/storage/: storage PVC, giới hạn, ghi nguyên tử, path safety, retention.
+- internal/provider/provider.go: capability interface. internal/provider/mock/: Mock adapter và test.
+- internal/mock/: worker SVG prototype; internal/api/: API workflow prototype.
+- charts/kubereel/: Helm chart, CRD và test. tests/e2e-kind.sh: Kind end-to-end.
+- Dockerfile: image duy nhất, đã chứa FFmpeg; host tại thời điểm kiểm tra không có ffmpeg/ffprobe.
+
+5. Kiểm tra F18 và trạng thái Git
+- F18 đã pass: go fmt ./..., go vet ./..., go test ./..., go build ./..., go test -race ./... (chạy trong Docker golang:1.23.3), helm lint, helm template, 10 test chart Python và tests/e2e-kind.sh.
+- Test video trên host được skip vì host không cài ffmpeg/ffprobe; chạy lại TestVideoClip trong Docker image đã pass, ffprobe xác nhận MP4 có video stream.
+- Lượt race đầu bị lỗi do source bị sửa đồng thời khi compile; chạy lại trên source ổn định và đã pass.
+- F18 đã push lên origin/develop. HEAD tại lúc ghi: b2dd01bf598cc546120a0b2c2ecb9a719a846ad9. Không có thay đổi tracked chưa commit trước khi tạo file bàn giao này.
+- AGENTS.md và .idea/ là untracked của người dùng. Không đưa vào commit. Không đưa secrets hoặc generated media vào Git.
+
+6. Ưu tiên tiếp theo
+- Chờ user yêu cầu task cụ thể. Nếu user yêu cầu F19, chỉ triển khai FFmpeg rendering theo SPEC, bảo đảm đối số an toàn, không cho phép shell tùy ý, test media thực tế và không làm F20.
+- Khi được yêu cầu xử lý F16, tách rõ cleanup còn thiếu và phụ thuộc xác thực F23; tránh xóa artifact đang được ghi hoặc khi trạng thái Job không chắc chắn.
+- Luôn báo task ID, file thay đổi, test và kết quả thực, giới hạn/blocker, commit hash và push status.

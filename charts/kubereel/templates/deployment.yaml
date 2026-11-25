@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kubereel.fullname" . }}
+  labels:
+    {{- include "kubereel.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "kubereel.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kubereel.selectorLabels" . | nindent 8 }}
+        kubereel.io/control-plane: {{ .Release.Name | quote }}
+    spec:
+      serviceAccountName: {{ include "kubereel.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: kubereel
+          image: {{ printf "%s:%s" .Values.image.repository (.Values.image.tag | toString) | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          args: ["serve"]
+          env:
+            - name: ARTIFACT_MAX_BYTES
+              value: {{ printf "%d" (.Values.storage.maxArtifactBytes | int64) | quote }}
+            - name: ARTIFACT_RETENTION_SECONDS
+              value: {{ printf "%d" (.Values.storage.retentionSeconds | int64) | quote }}
+            - name: EXECUTION_MODE
+              value: {{ .Values.execution.mode | quote }}
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: JOB_IMAGE
+              value: {{ printf "%s:%s" .Values.image.repository (.Values.image.tag | toString) | quote }}
+            - name: IMAGE_PULL_POLICY
+              value: {{ .Values.image.pullPolicy | quote }}
+            - name: PVC_NAME
+              value: {{ include "kubereel.claimName" . | quote }}
+            - name: INSTANCE_NAME
+              value: {{ .Release.Name | quote }}
+            - name: SHARED_STORAGE
+              value: {{ eq .Values.storage.accessMode "ReadWriteMany" | quote }}
+            - name: MAX_CONCURRENT_JOBS
+              value: {{ .Values.execution.maxConcurrentJobs | quote }}
+            - name: JOB_TTL_SECONDS
+              value: {{ .Values.execution.jobTTLSeconds | quote }}
+          ports:
+            - name: http
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "kubereel.claimName" . }}

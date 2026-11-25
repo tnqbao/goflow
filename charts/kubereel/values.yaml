@@ -1,0 +1,45 @@
+replicaCount: 1
+
+image:
+  repository: kubereel
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+storage:
+  type: pvc
+  size: 10Gi
+  # Empty uses the cluster's default StorageClass.
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  existingClaim: ""
+  maxArtifactBytes: 1073741824
+  # Zero disables artifact expiry for successful VideoRuns.
+  retentionSeconds: 0
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+execution:
+  mode: kubernetes
+  maxConcurrentJobs: 5
+  jobTTLSeconds: 86400
+
+providers:
+  mock:
+    enabled: true
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: ""
+  tls: []
