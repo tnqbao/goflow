@@ -51,3 +51,16 @@ ingress:
   annotations: {}
   host: ""
   tls: []
+
+networkPolicy:
+  enabled: false
+  ingressFrom: []
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+  bearerTokenSecret:
+    name: ""
+    key: "token"

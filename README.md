@@ -76,17 +76,22 @@ kubectl -n kubereel get videorun horror-shorts-demo -w
 | `auth.sessionTTLSeconds` | `86400` | Browser session lifetime in seconds (24h) |
 | `auth.existingSecret` | `""` | Optional Kubernetes Secret for headless admin bootstrap |
 | `ingress.enabled` | `false` | Optional Ingress (requires `ingress.host`) |
+| `networkPolicy.enabled` | `false` | Optional NetworkPolicy isolating control plane and Jobs |
+| `serviceMonitor.enabled` | `false` | Optional Prometheus ServiceMonitor (requires `bearerTokenSecret.name`) |
 
-### Upgrading & CRDs
+### Lifecycle Operations (Upgrade, Backup, CRD Migration, Uninstall)
 
-Helm installs CRDs on initial install but does not automatically update them on upgrade. Apply CRD changes before running `helm upgrade`:
+Helm installs CRDs on initial install but does not automatically update or delete them on upgrade/uninstall. Apply CRD changes before running `helm upgrade`:
 
 ```sh
-kubectl apply -f charts/kubereel/crds/
+kubectl apply --server-side -f charts/kubereel/crds/
 helm upgrade kubereel oci://registry-1.docker.io/iamqbao/kubereel-chart \
   --version 0.1.0 \
-  --namespace kubereel
+  --namespace kubereel \
+  --reuse-values
 ```
+
+See [docs/helm-operations.md](docs/helm-operations.md) for complete documentation on zero-config vs multi-node `ReadWriteMany` installation, `NetworkPolicy`/`ServiceMonitor` setup, `helm upgrade` & rollback, PVC + CRD backup/restore, and `helm uninstall` behavior.
 
 ---
 

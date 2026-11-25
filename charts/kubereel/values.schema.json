@@ -47,6 +47,39 @@
         "tag": {"type": "string", "minLength": 1, "not": {"const": "latest"}},
         "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
       }
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "className": {"type": "string"},
+        "annotations": {"type": "object"},
+        "host": {"type": "string"},
+        "tls": {"type": "array"}
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "ingressFrom": {"type": "array"}
+      }
+    },
+    "serviceMonitor": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "interval": {"type": "string", "minLength": 2},
+        "scrapeTimeout": {"type": "string", "minLength": 2},
+        "labels": {"type": "object"},
+        "bearerTokenSecret": {
+          "type": "object",
+          "properties": {
+            "name": {"type": "string"},
+            "key": {"type": "string", "minLength": 1}
+          }
+        }
+      }
     }
   }
 }

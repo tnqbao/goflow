@@ -1,0 +1,18 @@
+KubeReel {{ .Chart.AppVersion }} has been deployed in namespace {{ .Release.Namespace }}.
+
+{{- if .Values.ingress.enabled }}
+1. Access the Web Dashboard:
+   https://{{ .Values.ingress.host }}
+{{- else }}
+1. Forward the HTTP service locally and open the Web Dashboard:
+   kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "kubereel.fullname" . }} 8080:{{ .Values.service.port }}
+   http://localhost:8080
+{{- end }}
+
+{{- if not .Values.auth.existingSecret }}
+2. Complete the one-time initial administrator setup at /setup before exposing any ingress publicly.
+{{- end }}
+
+3. Note on upgrades:
+   Helm does not automatically update CRDs in crds/ during upgrades. Apply updated CRDs first:
+   kubectl apply -f charts/kubereel/crds/

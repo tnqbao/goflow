@@ -1,0 +1,25 @@
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "kubereel.fullname" . }}
+  labels:
+    {{- include "kubereel.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "kubereel.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval | quote }}
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout | quote }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ required "serviceMonitor.bearerTokenSecret.name is required when serviceMonitor is enabled" .Values.serviceMonitor.bearerTokenSecret.name | quote }}
+          key: {{ required "serviceMonitor.bearerTokenSecret.key is required when serviceMonitor is enabled" .Values.serviceMonitor.bearerTokenSecret.key | quote }}
+{{- end }}

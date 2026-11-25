@@ -510,7 +510,7 @@ for attempt in $(seq 1 30); do
 done
 if [ -z "$port" ]; then printf 'port-forward did not become ready\n' >&2; exit 1; fi
 
-python3 - "$port" "$workdir/workflow-id" <<'PY'
+python3 - "$port" "$workdir/workflow-id" "$workdir/auth-token" "$workdir/final-video-id" <<'PY'
 import http.cookiejar, json, re, sys, time, urllib.error, urllib.parse, urllib.request
 
 base = f'http://127.0.0.1:{sys.argv[1]}'
@@ -977,6 +977,10 @@ delete_clip = urllib.request.Request(
 with browser.open(delete_clip, timeout=5) as response:
     if response.status != 204:
         raise RuntimeError('Media Library artifact delete failed')
+with open(sys.argv[3], 'w', encoding='utf-8') as token_out:
+    token_out.write(api_token)
+with open(sys.argv[4], 'w', encoding='utf-8') as vid_out:
+    vid_out.write(final_video['id'])
 print('Embedded dashboard, visual workflow DAG API, Media Library, and CSRF-protected actions verified')
 
 form_body = urllib.parse.urlencode({
@@ -1013,10 +1017,114 @@ else:
 PY
 
 workflow_id=$(cat "$workdir/workflow-id")
+jobs_cleaned=0
 for attempt in $(seq 1 30); do
   remaining=$(kubectl --kubeconfig "$kubeconfig" -n kubereel-test get jobs -l "kubereel.io/workflow=$workflow_id" -o name)
-  if [ -z "$remaining" ]; then printf 'Workflow Jobs cleaned up\n'; exit 0; fi
+  if [ -z "$remaining" ]; then
+    printf 'Workflow Jobs cleaned up\n'
+    jobs_cleaned=1
+    break
+  fi
   sleep 1
 done
-printf 'Workflow Jobs were not cleaned up\n' >&2
-exit 1
+if [ "$jobs_cleaned" -ne 1 ]; then
+  printf 'Workflow Jobs were not cleaned up\n' >&2
+  exit 1
+fi
+
+# Verify single-container permanent workload topology before upgrade.
+cp_containers=$(kubectl --kubeconfig "$kubeconfig" -n kubereel-test get pods -l kubereel.io/control-plane=kubereel -o jsonpath='{.items[*].spec.containers[*].name}')
+if [ "$cp_containers" != "kubereel" ]; then
+  printf 'expected single permanent kubereel container, got: %s\n' "$cp_containers" >&2
+  exit 1
+fi
+
+# Verify consistent PVC data backup before upgrade.
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test exec deployment/kubereel-kubereel -- tar -C /data -czf - kubereel.db >"$workdir/data-backup.tar.gz"
+if ! tar -tzf "$workdir/data-backup.tar.gz" | grep -Fxq 'kubereel.db'; then
+  printf 'backup archive did not include kubereel.db\n' >&2
+  exit 1
+fi
+
+# Stop pre-upgrade port-forward before Recreate rollout replaces the Pod.
+kill "$forward_pid" 2>/dev/null || :
+wait "$forward_pid" 2>/dev/null || :
+forward_pid=""
+
+# Apply CRDs server-side and validate Helm upgrade with NetworkPolicy enabled.
+kubectl --kubeconfig "$kubeconfig" apply --server-side -f ./charts/kubereel/crds/ >/dev/null
+helm upgrade kubereel ./charts/kubereel --kubeconfig "$kubeconfig" --namespace kubereel-test \
+  --set image.repository=kubereel-e2e \
+  --set "image.tag=$suffix" \
+  --set image.pullPolicy=Never \
+  --set execution.jobTTLSeconds=7200 \
+  --set execution.maxConcurrentJobs=6 \
+  --set networkPolicy.enabled=true \
+  --wait --timeout 120s
+
+upgraded_max=$(kubectl --kubeconfig "$kubeconfig" -n kubereel-test get deployment kubereel-kubereel -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="MAX_CONCURRENT_JOBS")].value}')
+if [ "$upgraded_max" != "6" ]; then
+  printf 'expected upgraded MAX_CONCURRENT_JOBS=6, got: %s\n' "$upgraded_max" >&2
+  exit 1
+fi
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test get networkpolicy kubereel-kubereel kubereel-kubereel-jobs >/dev/null
+
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test port-forward --address 127.0.0.1 service/kubereel-kubereel :8080 >"$workdir/forward-upgraded.log" 2>&1 &
+forward_pid=$!
+port=""
+for attempt in $(seq 1 30); do
+  port=$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) -> 8080$/\1/p' "$workdir/forward-upgraded.log" | head -1)
+  if [ -n "$port" ]; then break; fi
+  if ! kill -0 "$forward_pid" 2>/dev/null; then cat "$workdir/forward-upgraded.log" >&2; exit 1; fi
+  sleep 1
+done
+if [ -z "$port" ]; then printf 'post-upgrade port-forward did not become ready\n' >&2; exit 1; fi
+
+python3 - "$port" "$workdir/auth-token" "$workdir/final-video-id" <<'PY'
+import json, sys, urllib.parse, urllib.request
+
+base = f'http://127.0.0.1:{sys.argv[1]}'
+with open(sys.argv[2], encoding='utf-8') as f:
+    token = f.read().strip()
+with open(sys.argv[3], encoding='utf-8') as f:
+    video_id = f.read().strip()
+
+headers = {'Authorization': f'Bearer {token}'}
+me_req = urllib.request.Request(base + '/api/v1/auth/me', headers=headers)
+with urllib.request.urlopen(me_req, timeout=5) as response:
+    me = json.load(response)
+    if me.get('username') != 'admin':
+        raise RuntimeError(f'post-upgrade auth state lost: {me}')
+
+dl_req = urllib.request.Request(
+    base + '/api/v1/artifacts/' + urllib.parse.quote(video_id, safe='') + '/download',
+    headers=headers,
+)
+with urllib.request.urlopen(dl_req, timeout=5) as response:
+    data = response.read()
+    if len(data) < 24 or data[4:8] != b'ftyp':
+        raise RuntimeError('post-upgrade PVC artifact corrupted or missing')
+print('Helm upgrade preserved SQLite auth state and PVC video artifacts')
+PY
+
+kill "$forward_pid" 2>/dev/null || :
+wait "$forward_pid" 2>/dev/null || :
+forward_pid=""
+
+# Validate Helm uninstall removes release workloads/PVC while preserving CRDs and reusable definitions.
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test delete videoruns --all --timeout=60s >/dev/null
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test delete jobs -l app.kubernetes.io/name=kubereel --timeout=60s >/dev/null
+helm uninstall kubereel --kubeconfig "$kubeconfig" --namespace kubereel-test --wait --timeout=120s
+for kind_name in deployment/kubereel-kubereel service/kubereel-kubereel serviceaccount/kubereel-kubereel role/kubereel-kubereel rolebinding/kubereel-kubereel pvc/kubereel-kubereel networkpolicy/kubereel-kubereel networkpolicy/kubereel-kubereel-jobs; do
+  if [ -n "$(kubectl --kubeconfig "$kubeconfig" -n kubereel-test get "$kind_name" --ignore-not-found -o name)" ]; then
+    printf 'Helm uninstall left managed resource behind: %s\n' "$kind_name" >&2
+    exit 1
+  fi
+done
+kubectl --kubeconfig "$kubeconfig" get crd videoworkflows.kubereel.io videoruns.kubereel.io videoproviders.kubereel.io >/dev/null
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test get videoworkflow sample >/dev/null
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test get videoprovider sample-provider >/dev/null
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test delete videoworkflows,videoproviders --all --timeout=60s >/dev/null
+kubectl --kubeconfig "$kubeconfig" delete -f ./charts/kubereel/crds/ --timeout=60s >/dev/null
+printf 'Helm install, CRD migration, upgrade, backup, and uninstall verified\n'
+exit 0

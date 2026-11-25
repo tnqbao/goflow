@@ -2,6 +2,8 @@
 """Render the chart and verify its deployment invariants. Requires Helm and PyYAML."""
 import pathlib
 import subprocess
+import tarfile
+import tempfile
 import unittest
 
 import yaml
@@ -9,14 +11,21 @@ import yaml
 CHART = pathlib.Path(__file__).resolve().parents[1]
 
 
-def render(*values):
+def render_list(*values):
     result = subprocess.run(
         ["helm", "template", "test", str(CHART), *values],
         text=True,
         capture_output=True,
         check=True,
     )
-    return {item["metadata"]["name"] if item["kind"] == "CustomResourceDefinition" else item["kind"]: item for item in yaml.safe_load_all(result.stdout) if item}
+    return [item for item in yaml.safe_load_all(result.stdout) if item]
+
+
+def render(*values):
+    return {
+        item["metadata"]["name"] if item["kind"] == "CustomResourceDefinition" else item["kind"]: item
+        for item in render_list(*values)
+    }
 
 
 class ChartTest(unittest.TestCase):
@@ -178,6 +187,59 @@ class ChartTest(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ingress.host is required", result.stderr)
+
+    def test_network_policy_isolates_control_plane_and_jobs(self):
+        items = render_list("--set", "networkPolicy.enabled=true")
+        policies = {item["metadata"]["name"]: item for item in items if item["kind"] == "NetworkPolicy"}
+        self.assertEqual(set(policies), {"test-kubereel", "test-kubereel-jobs"})
+        cp_spec = policies["test-kubereel"]["spec"]
+        self.assertEqual(cp_spec["policyTypes"], ["Ingress"])
+        self.assertEqual(cp_spec["ingress"][0]["ports"], [{"protocol": "TCP", "port": "http"}])
+
+        jobs_spec = policies["test-kubereel-jobs"]["spec"]
+        self.assertEqual(jobs_spec["policyTypes"], ["Ingress", "Egress"])
+        self.assertEqual(jobs_spec["ingress"], [])
+        self.assertEqual(jobs_spec["podSelector"]["matchLabels"], {"app.kubernetes.io/name": "kubereel", "kubereel.io/instance": "test"})
+
+    def test_service_monitor_requires_bearer_secret_and_renders(self):
+        missing = subprocess.run(
+            ["helm", "template", "test", str(CHART), "--set", "serviceMonitor.enabled=true"],
+            text=True,
+            capture_output=True,
+        )
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("serviceMonitor.bearerTokenSecret.name is required", missing.stderr)
+
+        docs = render(
+            "--set", "serviceMonitor.enabled=true",
+            "--set", "serviceMonitor.bearerTokenSecret.name=prom-kubereel-token",
+            "--set", "serviceMonitor.bearerTokenSecret.key=api-token",
+            "--set", "serviceMonitor.labels.release=prometheus",
+        )
+        sm = docs["ServiceMonitor"]
+        self.assertEqual(sm["apiVersion"], "monitoring.coreos.com/v1")
+        self.assertEqual(sm["metadata"]["labels"]["release"], "prometheus")
+        endpoint = sm["spec"]["endpoints"][0]
+        self.assertEqual(endpoint["path"], "/metrics")
+        self.assertEqual(endpoint["port"], "http")
+        self.assertEqual(
+            endpoint["authorization"],
+            {"type": "Bearer", "credentials": {"name": "prom-kubereel-token", "key": "api-token"}},
+        )
+
+    def test_helm_package_includes_crds_schema_and_excludes_tests(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subprocess.run(["helm", "package", str(CHART), "--destination", tmpdir], check=True, capture_output=True)
+            archives = list(pathlib.Path(tmpdir).glob("kubereel-chart-*.tgz"))
+            self.assertEqual(len(archives), 1)
+            with tarfile.open(archives[0], "r:gz") as archive:
+                names = set(archive.getnames())
+            self.assertIn("kubereel-chart/values.schema.json", names)
+            self.assertIn("kubereel-chart/templates/NOTES.txt", names)
+            self.assertIn("kubereel-chart/crds/kubereel.io_videoworkflows.yaml", names)
+            self.assertIn("kubereel-chart/crds/kubereel.io_videoruns.yaml", names)
+            self.assertIn("kubereel-chart/crds/kubereel.io_videoproviders.yaml", names)
+            self.assertFalse(any("/tests/" in entry for entry in names))
 
 
 if __name__ == "__main__":
