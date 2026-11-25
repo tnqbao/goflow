@@ -649,6 +649,28 @@ assert run_request('GET', '/runs?limit=1')['items']
 completed = wait_run(run_path, 'Succeeded')
 assert completed['steps'][0]['name'] == 'image'
 assert len(run_request('GET', run_path + '/artifacts')['items']) == 1
+artifact_page = run_request('GET', '/artifacts?' + urllib.parse.urlencode({'runId': run['id'], 'limit': 1}))
+artifact = artifact_page['items'][0]
+assert artifact['runId'] == run['id'] and artifact['name'] == 'scene.svg' and artifact['sizeBytes'] > 0
+artifact_path = '/artifacts/' + artifact['id']
+assert run_request('GET', artifact_path) == artifact
+download_url = base + '/api/v1' + artifact_path + '/download'
+try:
+    urllib.request.urlopen(download_url, timeout=10)
+except urllib.error.HTTPError as error:
+    assert error.code == 401
+else:
+    raise RuntimeError('unauthenticated artifact download succeeded')
+ranged = urllib.request.Request(download_url, headers={**auth_headers, 'Range': 'bytes=0-3'})
+with urllib.request.urlopen(ranged, timeout=10) as response:
+    assert response.status == 206 and response.read() == b'<svg'
+    assert response.headers['Content-Disposition'].startswith('attachment')
+deleted = urllib.request.Request(base + '/api/v1' + artifact_path, method='DELETE', headers=auth_headers)
+with urllib.request.urlopen(deleted, timeout=10) as response:
+    assert response.status == 204
+run_request('GET', artifact_path, expected=404)
+assert run_request('GET', '/artifacts?' + urllib.parse.urlencode({'runId': run['id']}))['items'] == []
+
 assert run_request('GET', run_path + '/logs?step=image&tailLines=10')['step'] == 'image'
 run_request('POST', run_path + '/cancel', expected=409)
 run_request('POST', run_path + '/retry', {}, 409)

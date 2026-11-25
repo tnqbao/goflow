@@ -150,7 +150,8 @@ func runServer(ctx context.Context, cfg config.Config) (runErr error) {
 	(web.AuthController{Service: authSvc}).Register(router)
 	if operator != nil {
 		registerClusterControllers(router, authSvc, workflowSvc, providerSvc, service.NewProviderManagement(operator.ProviderRepository), service.NewWorkflowDefinitions(operator.WorkflowDefinitions),
-			service.NewExecutions(operator.ExecutionRepository, operator.WorkflowDefinitions))
+			service.NewExecutions(operator.ExecutionRepository, operator.WorkflowDefinitions),
+			service.NewArtifacts(operator.ExecutionRepository, artifacts))
 		stopOperator := startBackgroundController(ctx, operator)
 		defer stopOperator()
 	} else {
@@ -175,6 +176,7 @@ func registerClusterControllers(
 	management *service.ProviderManagement,
 	definitions *service.WorkflowDefinitions,
 	executions *service.Executions,
+	artifacts *service.Artifacts,
 ) {
 	(api.Router{
 		Auth:                auth,
@@ -183,6 +185,7 @@ func registerClusterControllers(
 		ProviderManagement:  management,
 		WorkflowDefinitions: definitions,
 		Executions:          executions,
+		Artifacts:           artifacts,
 	}).Register(e)
 
 	(web.WorkflowController{

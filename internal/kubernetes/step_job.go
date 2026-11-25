@@ -2,12 +2,11 @@ package kubernetes
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"path"
 
+	"github.com/tnqbao/kubereel/internal/workflow"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -208,36 +207,13 @@ func stepJobForStep(runName string, uid types.UID, step executableStep, attempt 
 		attempt,
 		StageWorker,
 		"request.json",
-		stepOutputFile(step.Type, cfg.ProviderName != ""),
+		workflow.StepOutputFile(step.Type, cfg.ProviderName != ""),
 		cfg,
 	)
 }
 
 func stepOutputArtifactKey(step executableStep, workflowID string, externalProvider bool) string {
-	return path.Join("workflows", workflowID, stepOutputFile(step.Type, externalProvider))
-}
-
-func stepOutputFile(stepType string, externalProvider bool) string {
-	switch stepType {
-	case "llm":
-		return "script.json"
-	case "video":
-		return "clip.mp4"
-	case "ffmpeg":
-		return "output.mp4"
-	case "image":
-		return imageOutputFile(externalProvider)
-	default:
-		return "scene.svg"
-	}
-}
-
-func imageOutputFile(externalProvider bool) string {
-	if externalProvider {
-		return "image.png"
-	}
-
-	return "scene.svg"
+	return path.Join("workflows", workflowID, workflow.StepOutputFile(step.Type, externalProvider))
 }
 
 func buildOwnedStepJob(
@@ -256,7 +232,7 @@ func buildOwnedStepJob(
 		return nil, fmt.Errorf("attempt must be between 1 and %d", maxStepAttempts)
 	}
 
-	workflowID := deterministicStepID(uid, stepName, attempt)
+	workflowID := workflow.StepWorkID(string(uid), stepName, attempt)
 	workflowDir := path.Join(dataMountPath, "workflows", workflowID)
 
 	job, err := jobWithPaths(workflowID, stage, path.Join(workflowDir, inputFile), path.Join(workflowDir, outputFile), cfg)
@@ -277,16 +253,6 @@ func buildOwnedStepJob(
 	}
 
 	return job, nil
-}
-
-func deterministicStepID(uid types.UID, stepName string, attempt int64) string {
-	identity := string(uid) + "\x00" + stepName
-	if attempt > 1 {
-		identity = fmt.Sprintf("%s\x00%d", identity, attempt)
-	}
-
-	hash := sha256.Sum256([]byte(identity))
-	return hex.EncodeToString(hash[:16])
 }
 
 func validateStepJob(actual, expected *batchv1.Job) error {

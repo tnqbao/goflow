@@ -19,6 +19,7 @@ import (
 	"github.com/tnqbao/kubereel/internal/renderer"
 	"github.com/tnqbao/kubereel/internal/service"
 	"github.com/tnqbao/kubereel/internal/storage"
+	"github.com/tnqbao/kubereel/internal/workflow"
 	batchv1 "k8s.io/api/batch/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -511,7 +512,7 @@ func resolveCompletedRasterDependency(
 		return "", fmt.Sprintf("dependency step %q has no recorded output", depName), nil
 	}
 
-	depWorkflowID := deterministicStepID(uid, depStep.Name, attempt)
+	depWorkflowID := workflow.StepWorkID(string(uid), depStep.Name, attempt)
 	return stepOutputArtifactKey(depStep, depWorkflowID, true), "", nil
 }
 
@@ -646,7 +647,7 @@ func resolveFFmpegReference(
 		return "", fmt.Sprintf("dependency step %q has no recorded output", ref), nil
 	}
 
-	depWorkflowID := deterministicStepID(uid, depStep.Name, attempt)
+	depWorkflowID := workflow.StepWorkID(string(uid), depStep.Name, attempt)
 	return stepOutputArtifactKey(depStep, depWorkflowID, hasRecordedExternalProvider(depStatus)), "", nil
 }
 

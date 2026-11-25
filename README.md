@@ -182,3 +182,9 @@ The authenticated [Execution API](docs/execution-api.yaml) starts runs from stor
 Cancel requests are reconciled by the operator. A retry starts the entire snapshot in a new run once a failed or cancelled run has no active work. Repeating a retry request for the same source run returns its existing retry. Runs marked `RequiresReview` must be investigated before starting new work. Runs referencing providers other than the built-in Mock require `allowPaid: true` on both launch and retry.
 
 A run exposes its step status and recorded artifact keys. The log endpoint reads a bounded tail from a recorded step Job while its Pod logs remain available.
+
+### Artifact management
+
+The authenticated [Artifact API](docs/artifact-api.yaml) lists available files published by Kubernetes VideoRuns. Filter the list with `runId` and use the returned artifact IDs to fetch metadata, download byte ranges or delete files. Follow `continue` until it is absent, including when a page is empty.
+
+Deletion requires a settled run and no active Jobs. It removes the file while preserving the historical reference in run status. The catalog skips deleted and expired files. The older SQLite workflow prototype continues to serve its MP4 output through its existing workflow download endpoint.
