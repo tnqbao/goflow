@@ -9,6 +9,7 @@ import (
 
 	"github.com/tnqbao/kubereel/internal/database"
 	"github.com/tnqbao/kubereel/internal/mock"
+	"github.com/tnqbao/kubereel/internal/storage"
 	"github.com/tnqbao/kubereel/internal/workflow"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -82,8 +83,17 @@ func testController(t *testing.T) (*Controller, *testJobs) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	artifacts, err := storage.NewFilesystem(dir, 1<<20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := artifacts.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs := &testJobs{jobs: make(map[string]*batchv1.Job)}
-	return &Controller{Store: workflow.NewStore(db), Jobs: jobs, Config: JobConfig{Image: "test/image:v1", Claim: "data", Instance: "test"}, DataDir: dir, MaxConcurrent: 1}, jobs
+	return &Controller{Store: workflow.NewStore(db), Jobs: jobs, Config: JobConfig{Image: "test/image:v1", Claim: "data", Instance: "test"}, Artifacts: artifacts, MaxConcurrent: 1}, jobs
 }
 
 func TestReconcileMockWorkflow(t *testing.T) {
@@ -96,15 +106,15 @@ func TestReconcileMockWorkflow(t *testing.T) {
 	if err := controller.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	root := filepath.Join(controller.DataDir, "workflows", w.ID)
-	if err := mock.Generate(ctx, filepath.Join(root, "request.json"), filepath.Join(root, "scene.svg")); err != nil {
+	root := filepath.Join("workflows", w.ID)
+	if err := mock.Generate(ctx, controller.Artifacts, filepath.Join(root, "request.json"), filepath.Join(root, "scene.svg")); err != nil {
 		t.Fatal(err)
 	}
 	jobs.finish(w.ID, "worker", batchv1.JobComplete)
 	if err := controller.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := mock.Render(ctx, filepath.Join(root, "scene.svg"), filepath.Join(root, "final.svg")); err != nil {
+	if err := mock.Render(ctx, controller.Artifacts, filepath.Join(root, "scene.svg"), filepath.Join(root, "final.svg")); err != nil {
 		t.Fatal(err)
 	}
 	jobs.finish(w.ID, "render", batchv1.JobComplete)

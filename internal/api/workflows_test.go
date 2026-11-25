@@ -12,6 +12,7 @@ import (
 
 	"github.com/tnqbao/kubereel/internal/database"
 	"github.com/tnqbao/kubereel/internal/provider"
+	"github.com/tnqbao/kubereel/internal/storage"
 	"github.com/tnqbao/kubereel/internal/workflow"
 )
 
@@ -23,8 +24,13 @@ func TestWorkflowEndpoints(t *testing.T) {
 	}
 	defer db.Close()
 	store := workflow.NewStore(db)
+	artifacts, err := storage.NewFilesystem(dir, 1<<20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer artifacts.Close()
 	mux := http.NewServeMux()
-	(Workflows{Store: store, DataDir: dir, Providers: provider.NewManager()}).Register(mux)
+	(Workflows{Store: store, Artifacts: artifacts, Providers: provider.NewManager()}).Register(mux)
 	providers := httptest.NewRecorder()
 	mux.ServeHTTP(providers, httptest.NewRequest(http.MethodGet, "/api/providers", nil))
 	if providers.Code != http.StatusOK || strings.TrimSpace(providers.Body.String()) != `[{"id":"mock","available":true}]` {
@@ -69,6 +75,28 @@ func TestWorkflowEndpoints(t *testing.T) {
 	mux.ServeHTTP(artifact, httptest.NewRequest(http.MethodGet, "/api/workflows/"+item.ID+"/artifact", nil))
 	if artifact.Code != http.StatusOK || artifact.Body.String() != "<svg/>" {
 		t.Fatalf("artifact: %d %s", artifact.Code, artifact.Body.String())
+	}
+	rangeRequest := httptest.NewRequest(http.MethodGet, "/api/workflows/"+item.ID+"/artifact", nil)
+	rangeRequest.Header.Set("Range", "bytes=1-3")
+	rangeResponse := httptest.NewRecorder()
+	mux.ServeHTTP(rangeResponse, rangeRequest)
+	if rangeResponse.Code != http.StatusPartialContent || rangeResponse.Body.String() != "svg" {
+		t.Fatalf("artifact range: %d %s", rangeResponse.Code, rangeResponse.Body.String())
+	}
+	if err := os.Remove(filepath.Join(dir, result)); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(outside, []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, result)); err != nil {
+		t.Fatal(err)
+	}
+	blocked := httptest.NewRecorder()
+	mux.ServeHTTP(blocked, httptest.NewRequest(http.MethodGet, "/api/workflows/"+item.ID+"/artifact", nil))
+	if blocked.Code != http.StatusNotFound {
+		t.Fatalf("symlink artifact: %d", blocked.Code)
 	}
 	for _, body := range []string{`{"prompt":""}`, `{"prompt":"hi","extra":1}`, `{"prompt":"hi"}{}`, `{"prompt":"hi","provider":"unknown"}`} {
 		response := httptest.NewRecorder()

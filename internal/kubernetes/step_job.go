@@ -33,11 +33,16 @@ func activeVideoJobs(ctx context.Context, jobs Jobs, instance string) (int, erro
 }
 
 func jobConfigStatus(cfg JobConfig, job *batchv1.Job) map[string]interface{} {
-	return map[string]interface{}{
+	status := map[string]interface{}{
 		"image": cfg.Image, "claim": cfg.Claim, "instance": cfg.Instance,
 		"sharedStorage": cfg.SharedStorage, "pullPolicy": string(job.Spec.Template.Spec.Containers[0].ImagePullPolicy),
 		"ttlSeconds": int64(*job.Spec.TTLSecondsAfterFinished),
 	}
+	if cfg.Artifacts != nil {
+		status["artifactMaxBytes"] = cfg.Artifacts.MaxBytes
+		status["artifactRetentionSeconds"] = cfg.Artifacts.RetentionSeconds
+	}
+	return status
 }
 
 func recordedJobConfig(entry map[string]interface{}, fallback JobConfig) (JobConfig, error) {
@@ -53,12 +58,14 @@ func recordedJobConfig(entry map[string]interface{}, fallback JobConfig) (JobCon
 		return JobConfig{}, fmt.Errorf("encode recorded Job configuration: %w", err)
 	}
 	var saved struct {
-		Image         string            `json:"image"`
-		Claim         string            `json:"claim"`
-		Instance      string            `json:"instance"`
-		SharedStorage *bool             `json:"sharedStorage"`
-		PullPolicy    corev1.PullPolicy `json:"pullPolicy"`
-		TTLSeconds    *int32            `json:"ttlSeconds"`
+		Image                    string            `json:"image"`
+		Claim                    string            `json:"claim"`
+		Instance                 string            `json:"instance"`
+		SharedStorage            *bool             `json:"sharedStorage"`
+		PullPolicy               corev1.PullPolicy `json:"pullPolicy"`
+		TTLSeconds               *int32            `json:"ttlSeconds"`
+		ArtifactMaxBytes         *int64            `json:"artifactMaxBytes"`
+		ArtifactRetentionSeconds *int64            `json:"artifactRetentionSeconds"`
 	}
 	if err := json.Unmarshal(data, &saved); err != nil {
 		return JobConfig{}, fmt.Errorf("decode recorded Job configuration: %w", err)
@@ -69,7 +76,17 @@ func recordedJobConfig(entry map[string]interface{}, fallback JobConfig) (JobCon
 	if *saved.TTLSeconds < 0 || (saved.PullPolicy != corev1.PullAlways && saved.PullPolicy != corev1.PullIfNotPresent && saved.PullPolicy != corev1.PullNever) {
 		return JobConfig{}, fmt.Errorf("recorded Job configuration is invalid")
 	}
-	return JobConfig{Image: saved.Image, Claim: saved.Claim, Instance: saved.Instance, SharedStorage: *saved.SharedStorage, PullPolicy: saved.PullPolicy, TTLSecondsAfterFinished: saved.TTLSeconds}, nil
+	if (saved.ArtifactMaxBytes == nil) != (saved.ArtifactRetentionSeconds == nil) {
+		return JobConfig{}, fmt.Errorf("recorded artifact configuration is incomplete")
+	}
+	config := JobConfig{Image: saved.Image, Claim: saved.Claim, Instance: saved.Instance, SharedStorage: *saved.SharedStorage, PullPolicy: saved.PullPolicy, TTLSecondsAfterFinished: saved.TTLSeconds}
+	if saved.ArtifactMaxBytes != nil {
+		config.Artifacts = &ArtifactConfig{MaxBytes: *saved.ArtifactMaxBytes, RetentionSeconds: *saved.ArtifactRetentionSeconds}
+	}
+	if !validArtifactConfig(config.Artifacts) {
+		return JobConfig{}, fmt.Errorf("recorded artifact configuration is invalid")
+	}
+	return config, nil
 }
 
 // StepJob builds a deterministic Mock image Job owned by a VideoRun.
@@ -114,7 +131,7 @@ func validateStepJob(actual, expected *batchv1.Job) error {
 		return fmt.Errorf("step Job pod configuration mismatch")
 	}
 	container, expectedContainer := pod.Containers[0], wanted.Containers[0]
-	if len(container.Command) != 0 || len(container.Env) != 0 || len(container.EnvFrom) != 0 || container.WorkingDir != "" || container.ImagePullPolicy != expectedContainer.ImagePullPolicy || !apiequality.Semantic.DeepEqual(container.SecurityContext, expectedContainer.SecurityContext) {
+	if len(container.Command) != 0 || !apiequality.Semantic.DeepEqual(container.Env, expectedContainer.Env) || len(container.EnvFrom) != 0 || container.WorkingDir != "" || container.ImagePullPolicy != expectedContainer.ImagePullPolicy || !apiequality.Semantic.DeepEqual(container.SecurityContext, expectedContainer.SecurityContext) {
 		return fmt.Errorf("step Job container configuration mismatch")
 	}
 	if container.Lifecycle != nil || container.LivenessProbe != nil || container.ReadinessProbe != nil || container.StartupProbe != nil || len(container.Ports) != 0 || container.Stdin || container.TTY {

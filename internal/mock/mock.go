@@ -9,9 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/tnqbao/kubereel/internal/storage"
 )
 
 const maxInput = 1 << 20
@@ -21,8 +21,8 @@ type Request struct {
 }
 
 // Generate creates an SVG placeholder for the requested scene.
-func Generate(ctx context.Context, input, output string) error {
-	data, err := readFile(ctx, input)
+func Generate(ctx context.Context, artifacts storage.Store, input, output string) error {
+	data, err := readFile(ctx, artifacts, input)
 	if err != nil {
 		return err
 	}
@@ -39,24 +39,24 @@ func Generate(ctx context.Context, input, output string) error {
 		return fmt.Errorf("escape prompt: %w", err)
 	}
 	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720"><rect width="1280" height="720" fill="#18202b"/><text x="64" y="90" fill="#fff" font-family="sans-serif" font-size="32">Mock scene</text><text x="64" y="150" fill="#fff" font-family="sans-serif" font-size="24">` + escaped.String() + `</text></svg>`
-	return writeFile(ctx, output, []byte(svg))
+	return artifacts.Put(ctx, output, strings.NewReader(svg))
 }
 
 // Render validates and copies a generated SVG as the final mock artifact.
-func Render(ctx context.Context, input, output string) error {
-	data, err := readFile(ctx, input)
+func Render(ctx context.Context, artifacts storage.Store, input, output string) error {
+	data, err := readFile(ctx, artifacts, input)
 	if err != nil {
 		return err
 	}
 	if err := validateSVG(data); err != nil {
 		return err
 	}
-	return writeFile(ctx, output, data)
+	return artifacts.Put(ctx, output, bytes.NewReader(data))
 }
 
 // ValidateSVG checks an existing Mock artifact without modifying it.
-func ValidateSVG(ctx context.Context, input string) error {
-	data, err := readFile(ctx, input)
+func ValidateSVG(ctx context.Context, artifacts storage.Store, input string) error {
+	data, err := readFile(ctx, artifacts, input)
 	if err != nil {
 		return err
 	}
@@ -85,52 +85,17 @@ func validateSVG(data []byte) error {
 	return nil
 }
 
-func readFile(ctx context.Context, path string) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	file, err := os.Open(path)
+func readFile(ctx context.Context, artifacts storage.Store, key string) ([]byte, error) {
+	file, err := artifacts.Open(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("open input: %w", err)
 	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, maxInput+1))
-	if err != nil {
+	data, readErr := io.ReadAll(io.LimitReader(file, maxInput+1))
+	if err := errors.Join(readErr, file.Close()); err != nil {
 		return nil, fmt.Errorf("read input: %w", err)
 	}
 	if len(data) > maxInput {
 		return nil, fmt.Errorf("input exceeds %d bytes", maxInput)
 	}
 	return data, nil
-}
-
-func writeFile(ctx context.Context, path string, data []byte) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if path == "" {
-		return fmt.Errorf("output path is required")
-	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("create output directory: %w", err)
-	}
-	file, err := os.CreateTemp(dir, ".kubereel-*")
-	if err != nil {
-		return fmt.Errorf("create output: %w", err)
-	}
-	defer os.Remove(file.Name())
-	if _, err := file.Write(data); err != nil {
-		return fmt.Errorf("write output: %w", errors.Join(err, file.Close()))
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close output: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := os.Rename(file.Name(), path); err != nil {
-		return fmt.Errorf("publish output: %w", err)
-	}
-	return nil
 }

@@ -1,17 +1,19 @@
 package kubernetes
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/tnqbao/kubereel/internal/mock"
+	"github.com/tnqbao/kubereel/internal/storage"
 	"github.com/tnqbao/kubereel/internal/workflow"
 	batchv1 "k8s.io/api/batch/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -31,7 +33,7 @@ type Controller struct {
 	Store         *workflow.Store
 	Jobs          Jobs
 	Config        JobConfig
-	DataDir       string
+	Artifacts     storage.Store
 	MaxConcurrent int
 	VideoRuns     *VideoRunController
 	JobLock       *sync.Mutex
@@ -62,7 +64,7 @@ func (c *Controller) Run(ctx context.Context) {
 }
 
 func (c *Controller) Reconcile(ctx context.Context) error {
-	if c.Store == nil || c.Jobs == nil || c.DataDir == "" || c.MaxConcurrent < 1 {
+	if c.Store == nil || c.Jobs == nil || c.Artifacts == nil || c.MaxConcurrent < 1 {
 		return fmt.Errorf("invalid workflow controller configuration")
 	}
 	if c.JobLock != nil {
@@ -101,13 +103,7 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 
 func (c *Controller) reconcileOne(ctx context.Context, w workflow.Workflow) error {
 	if w.Status == "queued" {
-		if err := writeRequest(c.DataDir, w); err != nil {
-			return err
-		}
-		if _, err := c.ensureJob(ctx, w.ID, "worker"); err != nil {
-			return err
-		}
-		return c.Store.Transition(ctx, w.ID, "queued", "running", "", "")
+		return c.start(ctx, w)
 	}
 	worker, err := c.getJob(ctx, w.ID, "worker")
 	if apierrors.IsNotFound(err) {
@@ -132,21 +128,35 @@ func (c *Controller) reconcileOne(ctx context.Context, w workflow.Workflow) erro
 	if !finished(render, batchv1.JobComplete) {
 		return nil
 	}
-	output := filepath.Join(c.DataDir, "workflows", w.ID, "final.svg")
-	info, err := os.Stat(output)
-	if errors.Is(err, os.ErrNotExist) {
+	output := filepath.Join("workflows", w.ID, "final.svg")
+	object, err := c.Artifacts.Open(ctx, output)
+	if errors.Is(err, fs.ErrNotExist) {
 		return c.fail(ctx, w.ID, "render output is missing")
 	}
 	if err != nil {
 		return fmt.Errorf("inspect render output: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Size() == 0 {
+	info, statErr := object.Stat()
+	if err := errors.Join(statErr, object.Close()); err != nil {
+		return fmt.Errorf("inspect render output: %w", err)
+	}
+	if info.Size() == 0 {
 		return c.fail(ctx, w.ID, "render output is invalid")
 	}
 	if err := c.Store.Transition(ctx, w.ID, "running", "succeeded", filepath.Join("workflows", w.ID, "final.svg"), ""); err != nil {
 		return err
 	}
 	return c.cleanup(ctx, w.ID)
+}
+
+func (c *Controller) start(ctx context.Context, w workflow.Workflow) error {
+	if err := writeRequest(ctx, c.Artifacts, w); err != nil {
+		return err
+	}
+	if _, err := c.ensureJob(ctx, w.ID, "worker"); err != nil {
+		return err
+	}
+	return c.Store.Transition(ctx, w.ID, "queued", "running", "", "")
 }
 
 func (c *Controller) fail(ctx context.Context, id, message string) error {
@@ -240,30 +250,15 @@ func validateJob(actual, expected *batchv1.Job) error {
 	return nil
 }
 
-func writeRequest(dataDir string, w workflow.Workflow) error {
+func writeRequest(ctx context.Context, artifacts storage.Store, w workflow.Workflow) error {
 	if !workflowID.MatchString(w.ID) {
 		return fmt.Errorf("invalid workflow ID")
-	}
-	dir := filepath.Join(dataDir, "workflows", w.ID)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("create workflow directory: %w", err)
 	}
 	data, err := json.Marshal(mock.Request{Prompt: w.Prompt})
 	if err != nil {
 		return fmt.Errorf("encode workflow request: %w", err)
 	}
-	file, err := os.CreateTemp(dir, ".request-*")
-	if err != nil {
-		return fmt.Errorf("create workflow request: %w", err)
-	}
-	defer os.Remove(file.Name())
-	if _, err := file.Write(data); err != nil {
-		return errors.Join(err, file.Close())
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close workflow request: %w", err)
-	}
-	if err := os.Rename(file.Name(), filepath.Join(dir, "request.json")); err != nil {
+	if err := artifacts.Put(ctx, filepath.ToSlash(filepath.Join("workflows", w.ID, "request.json")), bytes.NewReader(data)); err != nil {
 		return fmt.Errorf("publish workflow request: %w", err)
 	}
 	return nil

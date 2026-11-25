@@ -20,6 +20,12 @@ def render(*values):
 
 
 class ChartTest(unittest.TestCase):
+    def test_artifact_limits_are_rendered_as_decimal_integers(self):
+        container = render()["Deployment"]["spec"]["template"]["spec"]["containers"][0]
+        env = {item["name"]: item.get("value") for item in container["env"]}
+        self.assertEqual(env["KUBEREEL_ARTIFACT_MAX_BYTES"], "1073741824")
+        self.assertEqual(env["KUBEREEL_ARTIFACT_RETENTION_SECONDS"], "0")
+
     def test_video_workflow_crd_is_included(self):
         docs = render("--include-crds")
         crd = docs["videoworkflows.kubereel.io"]

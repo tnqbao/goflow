@@ -25,17 +25,17 @@ func mockRun(names ...string) *unstructured.Unstructured {
 	return run
 }
 
-func testStepController(t *testing.T, run *unstructured.Unstructured, maximum int) (*VideoRunController, *testJobs, string) {
+func testStepController(t *testing.T, run *unstructured.Unstructured, maximum int) (*VideoRunController, *testJobs) {
 	t.Helper()
 	legacy, jobs := testController(t)
 	controller, _ := testRunController(run)
-	controller.Executor = &StepExecutor{Runs: controller.Runs, Jobs: jobs, Store: legacy.Store, Config: legacy.Config, DataDir: legacy.DataDir, MaxConcurrent: maximum, JobLock: &sync.Mutex{}}
-	return controller, jobs, legacy.DataDir
+	controller.Executor = &StepExecutor{Runs: controller.Runs, Jobs: jobs, Store: legacy.Store, Config: legacy.Config, Artifacts: legacy.Artifacts, MaxConcurrent: maximum, JobLock: &sync.Mutex{}}
+	return controller, jobs
 }
 
 func TestStepJobRunsMockImage(t *testing.T) {
 	ctx := context.Background()
-	controller, jobs, dataDir := testStepController(t, mockRun("image"), 2)
+	controller, jobs := testStepController(t, mockRun("image"), 2)
 	for i := 0; i < 2; i++ {
 		if err := controller.Reconcile(ctx, "sample"); err != nil {
 			t.Fatal(err)
@@ -51,8 +51,8 @@ func TestStepJobRunsMockImage(t *testing.T) {
 		t.Fatalf("owner references: %v", job.OwnerReferences)
 	}
 	id := job.Labels["kubereel.io/workflow"]
-	dir := filepath.Join(dataDir, "workflows", id)
-	if err := mock.Generate(ctx, filepath.Join(dir, "request.json"), filepath.Join(dir, "scene.svg")); err != nil {
+	dir := filepath.Join("workflows", id)
+	if err := mock.Generate(ctx, controller.Executor.Artifacts, filepath.Join(dir, "request.json"), filepath.Join(dir, "scene.svg")); err != nil {
 		t.Fatal(err)
 	}
 	jobs.finish(id, "worker", batchv1.JobComplete)
@@ -78,7 +78,7 @@ func TestStepJobRunsMockImage(t *testing.T) {
 
 func TestStepExecutorParallelAndLimit(t *testing.T) {
 	ctx := context.Background()
-	controller, jobs, _ := testStepController(t, mockRun("first", "second"), 2)
+	controller, jobs := testStepController(t, mockRun("first", "second"), 2)
 	for i := 0; i < 4; i++ {
 		if err := controller.Reconcile(ctx, "sample"); err != nil {
 			t.Fatal(err)
@@ -87,7 +87,7 @@ func TestStepExecutorParallelAndLimit(t *testing.T) {
 	if len(jobs.jobs) != 2 {
 		t.Fatalf("Jobs = %d, want 2", len(jobs.jobs))
 	}
-	controller, jobs, _ = testStepController(t, mockRun("first", "second"), 1)
+	controller, jobs = testStepController(t, mockRun("first", "second"), 1)
 	for i := 0; i < 4; i++ {
 		if err := controller.Reconcile(ctx, "sample"); err != nil {
 			t.Fatal(err)
@@ -98,7 +98,7 @@ func TestStepExecutorParallelAndLimit(t *testing.T) {
 	}
 	run := mockRun("first", "second")
 	run.Object["spec"].(map[string]interface{})["execution"] = map[string]interface{}{"maxConcurrentSteps": int64(1)}
-	controller, jobs, _ = testStepController(t, run, 2)
+	controller, jobs = testStepController(t, run, 2)
 	for i := 0; i < 4; i++ {
 		if err := controller.Reconcile(ctx, "sample"); err != nil {
 			t.Fatal(err)
@@ -111,7 +111,7 @@ func TestStepExecutorParallelAndLimit(t *testing.T) {
 
 func TestStepExecutorAccountsForLegacyWork(t *testing.T) {
 	ctx := context.Background()
-	controller, jobs, _ := testStepController(t, mockRun("image"), 1)
+	controller, jobs := testStepController(t, mockRun("image"), 1)
 	legacy, err := controller.Executor.Store.Create(ctx, "legacy")
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +159,7 @@ func TestStepJobConfigurationAndIdentity(t *testing.T) {
 
 func TestStepExecutorMissingJobRequiresReview(t *testing.T) {
 	ctx := context.Background()
-	controller, jobs, _ := testStepController(t, mockRun("image"), 1)
+	controller, jobs := testStepController(t, mockRun("image"), 1)
 	for i := 0; i < 2; i++ {
 		if err := controller.Reconcile(ctx, "sample"); err != nil {
 			t.Fatal(err)
@@ -184,7 +184,7 @@ func TestStepExecutorMissingJobRequiresReview(t *testing.T) {
 
 func TestStepExecutorUncertainSubmissionDoesNotRetry(t *testing.T) {
 	ctx := context.Background()
-	controller, jobs, _ := testStepController(t, mockRun("image"), 1)
+	controller, jobs := testStepController(t, mockRun("image"), 1)
 	if err := controller.Reconcile(ctx, "sample"); err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestStepExecutorUncertainSubmissionDoesNotRetry(t *testing.T) {
 
 func TestStepExecutorRejectsMissingArtifact(t *testing.T) {
 	ctx := context.Background()
-	controller, jobs, _ := testStepController(t, mockRun("image"), 1)
+	controller, jobs := testStepController(t, mockRun("image"), 1)
 	for i := 0; i < 2; i++ {
 		if err := controller.Reconcile(ctx, "sample"); err != nil {
 			t.Fatal(err)
@@ -234,7 +234,7 @@ func TestStepExecutorRejectsMissingPrompt(t *testing.T) {
 	ctx := context.Background()
 	run := mockRun("image")
 	delete(run.Object["spec"].(map[string]interface{}), "inputs")
-	controller, jobs, _ := testStepController(t, run, 1)
+	controller, jobs := testStepController(t, run, 1)
 	for i := 0; i < 2; i++ {
 		if err := controller.Reconcile(ctx, "sample"); err != nil {
 			t.Fatal(err)
@@ -277,7 +277,7 @@ func TestSharedJobLimitDuringConcurrentReconciliation(t *testing.T) {
 	lock := &sync.Mutex{}
 	legacy.JobLock = lock
 	runs, _ := testRunController(mockRun("image"))
-	runs.Executor = &StepExecutor{Runs: runs.Runs, Jobs: jobs, Store: legacy.Store, Config: legacy.Config, DataDir: legacy.DataDir, MaxConcurrent: 1, JobLock: lock}
+	runs.Executor = &StepExecutor{Runs: runs.Runs, Jobs: jobs, Store: legacy.Store, Config: legacy.Config, Artifacts: legacy.Artifacts, MaxConcurrent: 1, JobLock: lock}
 	if _, err := legacy.Store.Create(ctx, "legacy"); err != nil {
 		t.Fatal(err)
 	}

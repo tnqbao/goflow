@@ -19,6 +19,7 @@ import (
 	"github.com/tnqbao/kubereel/internal/database"
 	"github.com/tnqbao/kubereel/internal/mock"
 	"github.com/tnqbao/kubereel/internal/provider"
+	"github.com/tnqbao/kubereel/internal/storage"
 	"github.com/tnqbao/kubereel/internal/web"
 	"github.com/tnqbao/kubereel/internal/workflow"
 )
@@ -26,7 +27,12 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := execute(ctx, os.Args[1:], config.Load()); err != nil {
+	cfg, err := config.Load()
+	if err != nil {
+		slog.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
+	if err := execute(ctx, os.Args[1:], cfg); err != nil {
 		slog.Error("application stopped", "error", err)
 		os.Exit(1)
 	}
@@ -51,10 +57,30 @@ func execute(ctx context.Context, args []string, cfg config.Config) error {
 	if flags.NArg() != 0 || *input == "" || *output == "" {
 		return fmt.Errorf("%s requires --input and --output", args[0])
 	}
-	if args[0] == "worker" {
-		return mock.Generate(ctx, *input, *output)
+	return runTask(ctx, args[0], *input, *output, cfg)
+}
+
+func runTask(ctx context.Context, command, input, output string, cfg config.Config) (runErr error) {
+	if cfg.Database == "" {
+		return fmt.Errorf("artifact data directory is required")
 	}
-	return mock.Render(ctx, *input, *output)
+	artifacts, err := storage.NewFilesystem(filepath.Dir(cfg.Database), cfg.ArtifactMaxBytes, cfg.ArtifactRetention)
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, artifacts.Close()) }()
+	inputKey, err := artifacts.Key(input)
+	if err != nil {
+		return fmt.Errorf("input artifact: %w", err)
+	}
+	outputKey, err := artifacts.Key(output)
+	if err != nil {
+		return fmt.Errorf("output artifact: %w", err)
+	}
+	if command == "worker" {
+		return mock.Generate(ctx, artifacts, inputKey, outputKey)
+	}
+	return mock.Render(ctx, artifacts, inputKey, outputKey)
 }
 
 func run(ctx context.Context, cfg config.Config) (runErr error) {
@@ -63,14 +89,19 @@ func run(ctx context.Context, cfg config.Config) (runErr error) {
 		return err
 	}
 	defer func() { runErr = errors.Join(runErr, db.Close()) }()
+	artifacts, err := storage.NewFilesystem(filepath.Dir(cfg.Database), cfg.ArtifactMaxBytes, cfg.ArtifactRetention)
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, artifacts.Close()) }()
 	store := workflow.NewStore(db)
-	controller, err := controllerFromEnv(ctx, store, filepath.Dir(cfg.Database))
+	controller, err := controllerFromEnv(ctx, store, artifacts, cfg)
 	if err != nil {
 		return err
 	}
 	mux := routes(db)
 	if controller != nil {
-		api.Workflows{Store: store, DataDir: filepath.Dir(cfg.Database), Providers: provider.NewManager()}.Register(mux)
+		api.Workflows{Store: store, Artifacts: artifacts, Providers: provider.NewManager()}.Register(mux)
 		registerWorkflowUI(mux, store)
 		controllerCtx, cancel := context.WithCancel(ctx)
 		done := make(chan struct{})

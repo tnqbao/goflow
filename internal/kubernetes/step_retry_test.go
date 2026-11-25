@@ -49,7 +49,7 @@ func TestRetryJobIdentityPreservesFirstAttempt(t *testing.T) {
 }
 
 func TestRetryKnownFailedJob(t *testing.T) {
-	controller, jobs, dataDir := testStepController(t, retryRun(), 1)
+	controller, jobs := testStepController(t, retryRun(), 1)
 	reconcileTimes(t, controller, 2)
 	var firstID string
 	for _, job := range jobs.jobs {
@@ -65,8 +65,8 @@ func TestRetryKnownFailedJob(t *testing.T) {
 		if id == firstID {
 			continue
 		}
-		dir := filepath.Join(dataDir, "workflows", id)
-		if err := mock.Generate(context.Background(), filepath.Join(dir, "request.json"), filepath.Join(dir, "scene.svg")); err != nil {
+		dir := filepath.Join("workflows", id)
+		if err := mock.Generate(context.Background(), controller.Executor.Artifacts, filepath.Join(dir, "request.json"), filepath.Join(dir, "scene.svg")); err != nil {
 			t.Fatal(err)
 		}
 		jobs.finish(id, "worker", batchv1.JobComplete)
@@ -84,7 +84,7 @@ func TestRetryKnownFailedJob(t *testing.T) {
 }
 
 func TestRetryStopsAtMaximum(t *testing.T) {
-	controller, jobs, _ := testStepController(t, retryRun(), 1)
+	controller, jobs := testStepController(t, retryRun(), 1)
 	reconcileTimes(t, controller, 2)
 	for _, job := range jobs.jobs {
 		jobs.finish(job.Labels["kubereel.io/workflow"], "worker", batchv1.JobFailed)

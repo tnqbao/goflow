@@ -3,8 +3,11 @@ package kubernetes
 
 import (
 	"fmt"
+	"math"
 	"path"
 	"regexp"
+	"strconv"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -21,6 +24,13 @@ type JobConfig struct {
 	SharedStorage           bool
 	PullPolicy              corev1.PullPolicy
 	TTLSecondsAfterFinished *int32
+	Artifacts               *ArtifactConfig
+}
+
+// ArtifactConfig is propagated to worker Jobs.
+type ArtifactConfig struct {
+	MaxBytes         int64
+	RetentionSeconds int64
 }
 
 // Job builds a single worker or render Job using the control-plane image.
@@ -40,6 +50,9 @@ func Job(id, stage string, cfg JobConfig) (*batchv1.Job, error) {
 	}
 	if cfg.PullPolicy != corev1.PullIfNotPresent && cfg.PullPolicy != corev1.PullAlways && cfg.PullPolicy != corev1.PullNever {
 		return nil, fmt.Errorf("invalid image pull policy")
+	}
+	if !validArtifactConfig(cfg.Artifacts) {
+		return nil, fmt.Errorf("invalid artifact configuration")
 	}
 	root := path.Join("/data/workflows", id)
 	input, output := path.Join(root, "request.json"), path.Join(root, "scene.svg")
@@ -70,10 +83,20 @@ func Job(id, stage string, cfg JobConfig) (*batchv1.Job, error) {
 			},
 		}},
 	}
+	if cfg.Artifacts != nil {
+		job.Spec.Template.Spec.Containers[0].Env = []corev1.EnvVar{
+			{Name: "KUBEREEL_ARTIFACT_MAX_BYTES", Value: strconv.FormatInt(cfg.Artifacts.MaxBytes, 10)},
+			{Name: "KUBEREEL_ARTIFACT_RETENTION_SECONDS", Value: strconv.FormatInt(cfg.Artifacts.RetentionSeconds, 10)},
+		}
+	}
 	if !cfg.SharedStorage {
 		job.Spec.Template.Spec.Affinity = &corev1.Affinity{PodAffinity: &corev1.PodAffinity{RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubereel.io/control-plane": cfg.Instance}}, TopologyKey: "kubernetes.io/hostname"}}}}
 	}
 	return job, nil
+}
+
+func validArtifactConfig(config *ArtifactConfig) bool {
+	return config == nil || (config.MaxBytes > 0 && config.MaxBytes <= 9007199254740991 && config.RetentionSeconds >= 0 && config.RetentionSeconds <= math.MaxInt64/int64(time.Second))
 }
 
 func boolPtr(v bool) *bool { return &v }

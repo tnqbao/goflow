@@ -25,15 +25,15 @@ func restartedController(previous *VideoRunController, changedConfig bool) *Vide
 	return &VideoRunController{Runs: previous.Runs, Executor: &executor}
 }
 
-func completeMockJob(t *testing.T, jobs *testJobs, dataDir string) {
+func completeMockJob(t *testing.T, jobs *testJobs, controller *VideoRunController) {
 	t.Helper()
 	for _, job := range jobs.jobs {
 		if finished(job, batchv1.JobFailed) || finished(job, batchv1.JobComplete) {
 			continue
 		}
 		id := job.Labels["kubereel.io/workflow"]
-		dir := filepath.Join(dataDir, "workflows", id)
-		if err := mock.Generate(context.Background(), filepath.Join(dir, "request.json"), filepath.Join(dir, "scene.svg")); err != nil {
+		dir := filepath.Join("workflows", id)
+		if err := mock.Generate(context.Background(), controller.Executor.Artifacts, filepath.Join(dir, "request.json"), filepath.Join(dir, "scene.svg")); err != nil {
 			t.Fatal(err)
 		}
 		jobs.finish(id, "worker", batchv1.JobComplete)
@@ -41,9 +41,9 @@ func completeMockJob(t *testing.T, jobs *testJobs, dataDir string) {
 }
 
 func TestRestartObservesJobWithOriginalConfiguration(t *testing.T) {
-	controller, jobs, dataDir := testStepController(t, mockRun("image"), 1)
+	controller, jobs := testStepController(t, mockRun("image"), 1)
 	reconcileTimes(t, controller, 2)
-	completeMockJob(t, jobs, dataDir)
+	completeMockJob(t, jobs, controller)
 	restarted := restartedController(controller, true)
 	reconcileTimes(t, restarted, 1)
 	run, err := restarted.Runs.Get(context.Background(), "sample", metav1.GetOptions{})
@@ -57,7 +57,7 @@ func TestRestartObservesJobWithOriginalConfiguration(t *testing.T) {
 }
 
 func TestRestartRetryUsesOriginalImage(t *testing.T) {
-	controller, jobs, dataDir := testStepController(t, retryRun(), 1)
+	controller, jobs := testStepController(t, retryRun(), 1)
 	reconcileTimes(t, controller, 2)
 	for _, job := range jobs.jobs {
 		jobs.finish(job.Labels["kubereel.io/workflow"], "worker", batchv1.JobFailed)
@@ -72,7 +72,7 @@ func TestRestartRetryUsesOriginalImage(t *testing.T) {
 			t.Fatalf("retry changed image: %s", job.Spec.Template.Spec.Containers[0].Image)
 		}
 	}
-	completeMockJob(t, jobs, dataDir)
+	completeMockJob(t, jobs, controller)
 	reconcileTimes(t, restarted, 1)
 	run, err := restarted.Runs.Get(context.Background(), "sample", metav1.GetOptions{})
 	if err != nil {
@@ -85,7 +85,7 @@ func TestRestartRetryUsesOriginalImage(t *testing.T) {
 }
 
 func TestRestartRecoversCancellation(t *testing.T) {
-	controller, jobs, _ := testStepController(t, mockRun("image"), 1)
+	controller, jobs := testStepController(t, mockRun("image"), 1)
 	reconcileTimes(t, controller, 2)
 	requestCancellation(t, controller)
 	reconcileTimes(t, controller, 2)
@@ -105,7 +105,7 @@ func TestRestartRecoversCancellation(t *testing.T) {
 }
 
 func TestRestartMissingReservedJobRequiresReview(t *testing.T) {
-	controller, jobs, _ := testStepController(t, mockRun("image"), 1)
+	controller, jobs := testStepController(t, mockRun("image"), 1)
 	reconcileTimes(t, controller, 1)
 	jobs.denied = true
 	if err := controller.Reconcile(context.Background(), "sample"); err == nil {
@@ -125,7 +125,7 @@ func TestRestartMissingReservedJobRequiresReview(t *testing.T) {
 }
 
 func TestRestartRecoversPreviouslyCreatedJobWithoutConfigSnapshot(t *testing.T) {
-	controller, jobs, dataDir := testStepController(t, mockRun("image"), 1)
+	controller, jobs := testStepController(t, mockRun("image"), 1)
 	reconcileTimes(t, controller, 2)
 	run, err := controller.Runs.Get(context.Background(), "sample", metav1.GetOptions{})
 	if err != nil {
@@ -142,7 +142,7 @@ func TestRestartRecoversPreviouslyCreatedJobWithoutConfigSnapshot(t *testing.T) 
 	if _, err := controller.Runs.UpdateStatus(context.Background(), run, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	completeMockJob(t, jobs, dataDir)
+	completeMockJob(t, jobs, controller)
 	restarted := restartedController(controller, false)
 	reconcileTimes(t, restarted, 1)
 	run, err = restarted.Runs.Get(context.Background(), "sample", metav1.GetOptions{})
@@ -156,7 +156,7 @@ func TestRestartRecoversPreviouslyCreatedJobWithoutConfigSnapshot(t *testing.T) 
 }
 
 func TestRestartRejectsIncompleteRecordedConfiguration(t *testing.T) {
-	controller, jobs, _ := testStepController(t, mockRun("image"), 1)
+	controller, jobs := testStepController(t, mockRun("image"), 1)
 	reconcileTimes(t, controller, 2)
 	run, err := controller.Runs.Get(context.Background(), "sample", metav1.GetOptions{})
 	if err != nil {
@@ -186,7 +186,7 @@ func TestRestartRejectsIncompleteRecordedConfiguration(t *testing.T) {
 }
 
 func TestRestartUnrecordedJobWithChangedConfigRequiresReview(t *testing.T) {
-	controller, jobs, _ := testStepController(t, mockRun("image"), 1)
+	controller, jobs := testStepController(t, mockRun("image"), 1)
 	reconcileTimes(t, controller, 2)
 	run, err := controller.Runs.Get(context.Background(), "sample", metav1.GetOptions{})
 	if err != nil {

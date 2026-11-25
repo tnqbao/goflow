@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/tnqbao/kubereel/internal/mock"
+	"github.com/tnqbao/kubereel/internal/storage"
 	"github.com/tnqbao/kubereel/internal/workflow"
 	batchv1 "k8s.io/api/batch/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -24,7 +25,7 @@ type StepExecutor struct {
 	Jobs          Jobs
 	Store         *workflow.Store
 	Config        JobConfig
-	DataDir       string
+	Artifacts     storage.Store
 	MaxConcurrent int
 	JobLock       *sync.Mutex
 }
@@ -45,7 +46,7 @@ type executableStep struct {
 
 // Reconcile submits or observes one supported step at a time.
 func (e *StepExecutor) Reconcile(ctx context.Context, run *unstructured.Unstructured, status map[string]interface{}) error {
-	if e.Runs == nil || e.Jobs == nil || e.Store == nil || e.JobLock == nil || e.DataDir == "" || e.MaxConcurrent < 1 {
+	if e.Runs == nil || e.Jobs == nil || e.Store == nil || e.JobLock == nil || e.Artifacts == nil || e.MaxConcurrent < 1 {
 		return fmt.Errorf("invalid VideoRun executor configuration")
 	}
 	e.JobLock.Lock()
@@ -193,7 +194,7 @@ func (e *StepExecutor) submit(ctx context.Context, run *unstructured.Unstructure
 		return fmt.Errorf("check step Job: %w", err)
 	}
 	id := job.Labels["kubereel.io/workflow"]
-	if err := writeRequest(e.DataDir, workflow.Workflow{ID: id, Prompt: prompt}); err != nil {
+	if err := writeRequest(ctx, e.Artifacts, workflow.Workflow{ID: id, Prompt: prompt}); err != nil {
 		return fmt.Errorf("write step request: %w", err)
 	}
 	entry["phase"] = "Running"
@@ -258,7 +259,7 @@ func (e *StepExecutor) observe(ctx context.Context, run *unstructured.Unstructur
 func (e *StepExecutor) recordSuccess(ctx context.Context, run *unstructured.Unstructured, status map[string]interface{}, statuses []interface{}, entry map[string]interface{}, job *batchv1.Job, finishRun bool) error {
 	id := job.Labels["kubereel.io/workflow"]
 	artifact := filepath.Join("workflows", id, "scene.svg")
-	err := mock.ValidateSVG(ctx, filepath.Join(e.DataDir, artifact))
+	err := mock.ValidateSVG(ctx, e.Artifacts, filepath.ToSlash(artifact))
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}

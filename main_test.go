@@ -132,11 +132,13 @@ func TestWorkerAndRenderCommands(t *testing.T) {
 	if err := os.WriteFile(request, []byte(`{"prompt":"A scene"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
+	cfg := config.Defaults()
+	cfg.Database = filepath.Join(dir, "db")
 	for _, args := range [][]string{
 		{"worker", "--input", request, "--output", scene},
 		{"render", "--input", scene, "--output", final},
 	} {
-		if err := execute(context.Background(), args, config.Config{}); err != nil {
+		if err := execute(context.Background(), args, cfg); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -166,6 +168,7 @@ func TestSingleExecutableCommands(t *testing.T) {
 		{"render", "--input", scene, "--output", result},
 	} {
 		command := exec.Command(binary, args...)
+		command.Env = append(os.Environ(), "KUBEREEL_DATA_DIR="+dir)
 		if output, err := command.CombinedOutput(); err != nil {
 			t.Fatalf("%s command: %v\n%s", args[0], err, output)
 		}
@@ -202,7 +205,10 @@ func TestEmbeddedAssets(t *testing.T) {
 func testConfig(t *testing.T) config.Config {
 	t.Helper()
 	dir := t.TempDir()
-	return config.Config{Address: "127.0.0.1:0", Database: filepath.Join(dir, "data", "kubereel.db")}
+	cfg := config.Defaults()
+	cfg.Address = "127.0.0.1:0"
+	cfg.Database = filepath.Join(dir, "data", "kubereel.db")
+	return cfg
 }
 
 func testDB(t *testing.T) *sql.DB {

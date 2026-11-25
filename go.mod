@@ -4,6 +4,7 @@ go 1.23.3
 
 require (
 	github.com/a-h/templ v0.3.1001
+	golang.org/x/sys v0.34.0
 	k8s.io/api v0.32.10
 	k8s.io/apimachinery v0.32.10
 	k8s.io/client-go v0.32.10
@@ -38,7 +39,6 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/net v0.42.0 // indirect
 	golang.org/x/oauth2 v0.23.0 // indirect
-	golang.org/x/sys v0.34.0 // indirect
 	golang.org/x/term v0.33.0 // indirect
 	golang.org/x/text v0.27.0 // indirect
 	golang.org/x/time v0.7.0 // indirect

@@ -65,6 +65,8 @@ These endpoints are experimental and do not yet implement the versioned API desc
 
 The default PVC uses `ReadWriteOnce` and Jobs are placed on the control-plane node. For multi-node execution, provide `ReadWriteMany` storage and set `storage.accessMode=ReadWriteMany`. To use an existing claim, set `storage.existingClaim` and match its access mode.
 
+Artifacts are limited to 1 GiB each by default; set `storage.maxArtifactBytes` or `KUBEREEL_ARTIFACT_MAX_BYTES` to change the limit. `storage.retentionSeconds` or `KUBEREEL_ARTIFACT_RETENTION_SECONDS` configures the retention interval; zero disables expiry. Expiration is only available through the storage cleanup operation for a terminal run, and is not scheduled automatically yet. Artifact endpoints do not yet have authentication and must not be exposed publicly.
+
 The chart defaults to a 10 GiB PVC, five concurrent Jobs and a 24-hour finished Job retention period (`execution.jobTTLSeconds`). A short retention period can remove a finished Job before the controller observes it, leaving its run in `RequiresReview`. The chart currently supports one replica, Kubernetes execution and PVC storage only. Authentication and a complete MP4 workflow remain future tasks; the optional ingress must not be publicly exposed while authentication is unavailable.
 
 Helm installs the `VideoWorkflow`, `VideoRun`, and `VideoProvider` CRDs on initial installation, but does not upgrade or delete CRDs automatically. When upgrading an existing installation, install new CRDs separately with `kubectl apply -f charts/kubereel/crds/` before upgrading the chart. Back up custom resources and review CRD changes first. Deleting a CRD deletes all its resources in the cluster.

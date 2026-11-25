@@ -75,3 +75,24 @@ func TestJobRejectsNegativeRetention(t *testing.T) {
 		t.Fatal("accepted negative retention")
 	}
 }
+
+func TestJobArtifactConfiguration(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	cfg := JobConfig{Image: "i", Claim: "c", Instance: "r", Artifacts: &ArtifactConfig{MaxBytes: 1024, RetentionSeconds: 60}}
+	job, err := Job(id, "worker", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := job.Spec.Template.Spec.Containers[0].Env
+	if len(env) != 2 || env[0].Value != "1024" || env[1].Value != "60" {
+		t.Fatalf("artifact environment = %v", env)
+	}
+	recorded, err := recordedJobConfig(map[string]interface{}{"jobConfig": jobConfigStatus(cfg, job)}, JobConfig{})
+	if err != nil || recorded.Artifacts == nil || *recorded.Artifacts != *cfg.Artifacts {
+		t.Fatalf("recorded config = %+v, %v", recorded, err)
+	}
+	cfg.Artifacts.MaxBytes = 0
+	if _, err := Job(id, "worker", cfg); err == nil {
+		t.Fatal("accepted zero artifact limit")
+	}
+}

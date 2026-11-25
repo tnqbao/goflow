@@ -16,6 +16,9 @@ storage:
   storageClass: ""
   accessMode: ReadWriteOnce
   existingClaim: ""
+  maxArtifactBytes: 1073741824
+  # Zero disables artifact expiry. Cleanup must be invoked for terminal runs.
+  retentionSeconds: 0
 
 resources:
   requests:

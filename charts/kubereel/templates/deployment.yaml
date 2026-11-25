@@ -35,6 +35,10 @@ spec:
               type: RuntimeDefault
           args: ["serve"]
           env:
+            - name: KUBEREEL_ARTIFACT_MAX_BYTES
+              value: {{ printf "%d" (.Values.storage.maxArtifactBytes | int64) | quote }}
+            - name: KUBEREEL_ARTIFACT_RETENTION_SECONDS
+              value: {{ printf "%d" (.Values.storage.retentionSeconds | int64) | quote }}
             - name: KUBEREEL_EXECUTION_MODE
               value: {{ .Values.execution.mode | quote }}
             - name: KUBEREEL_NAMESPACE

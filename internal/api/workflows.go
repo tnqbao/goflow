@@ -7,11 +7,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"path/filepath"
 	"regexp"
 
 	"github.com/tnqbao/kubereel/internal/provider"
+	"github.com/tnqbao/kubereel/internal/storage"
 	"github.com/tnqbao/kubereel/internal/workflow"
 )
 
@@ -19,7 +19,7 @@ var idPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 type Workflows struct {
 	Store     *workflow.Store
-	DataDir   string
+	Artifacts storage.Store
 	Providers *provider.Manager
 }
 
@@ -96,15 +96,28 @@ func (a Workflows) artifact(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "artifact not available", http.StatusNotFound)
 		return
 	}
-	file := filepath.Join(a.DataDir, expected)
-	info, err := os.Stat(file)
-	if err != nil || !info.Mode().IsRegular() {
+	if a.Artifacts == nil {
+		http.Error(w, "artifact storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	object, err := a.Artifacts.Open(r.Context(), filepath.ToSlash(expected))
+	if err != nil {
+		http.Error(w, "artifact not available", http.StatusNotFound)
+		return
+	}
+	defer func() {
+		if err := object.Close(); err != nil {
+			slog.Error("close artifact", "error", err)
+		}
+	}()
+	info, err := object.Stat()
+	if err != nil {
 		http.Error(w, "artifact not available", http.StatusNotFound)
 		return
 	}
 	w.Header().Set("Content-Type", "image/svg+xml")
 	w.Header().Set("Content-Disposition", `attachment; filename="mock-scene.svg"`)
-	http.ServeFile(w, r, file)
+	http.ServeContent(w, r, "mock-scene.svg", info.ModTime(), object)
 }
 
 func (a Workflows) lookup(w http.ResponseWriter, r *http.Request) (workflow.Workflow, bool) {

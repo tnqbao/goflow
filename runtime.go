@@ -9,7 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tnqbao/kubereel/internal/config"
 	"github.com/tnqbao/kubereel/internal/kubernetes"
+	"github.com/tnqbao/kubereel/internal/storage"
 	"github.com/tnqbao/kubereel/internal/workflow"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -19,7 +21,7 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-func controllerFromEnv(ctx context.Context, store *workflow.Store, dataDir string) (*kubernetes.Controller, error) {
+func controllerFromEnv(ctx context.Context, store *workflow.Store, artifacts storage.Store, cfg config.Config) (*kubernetes.Controller, error) {
 	mode := os.Getenv("KUBEREEL_EXECUTION_MODE")
 	if mode == "" {
 		return nil, nil
@@ -28,7 +30,7 @@ func controllerFromEnv(ctx context.Context, store *workflow.Store, dataDir strin
 		return nil, fmt.Errorf("unsupported execution mode %q", mode)
 	}
 	namespace := os.Getenv("KUBEREEL_NAMESPACE")
-	config := kubernetes.JobConfig{Image: os.Getenv("KUBEREEL_JOB_IMAGE"), Claim: os.Getenv("KUBEREEL_PVC"), Instance: os.Getenv("KUBEREEL_INSTANCE"), PullPolicy: corev1.PullPolicy(os.Getenv("KUBEREEL_IMAGE_PULL_POLICY"))}
+	config := kubernetes.JobConfig{Image: os.Getenv("KUBEREEL_JOB_IMAGE"), Claim: os.Getenv("KUBEREEL_PVC"), Instance: os.Getenv("KUBEREEL_INSTANCE"), PullPolicy: corev1.PullPolicy(os.Getenv("KUBEREEL_IMAGE_PULL_POLICY")), Artifacts: &kubernetes.ArtifactConfig{MaxBytes: cfg.ArtifactMaxBytes, RetentionSeconds: int64(cfg.ArtifactRetention / time.Second)}}
 	ttl, err := parseJobTTL(os.Getenv("KUBEREEL_JOB_TTL_SECONDS"))
 	if err != nil {
 		return nil, err
@@ -90,8 +92,8 @@ func controllerFromEnv(ctx context.Context, store *workflow.Store, dataDir strin
 		return nil, fmt.Errorf("PVC access modes do not support configured workflow placement")
 	}
 	lock := &sync.Mutex{}
-	executor := &kubernetes.StepExecutor{Runs: runs, Jobs: jobs, Store: store, Config: config, DataDir: dataDir, MaxConcurrent: maximum, JobLock: lock}
-	return &kubernetes.Controller{Store: store, Jobs: jobs, Config: config, DataDir: dataDir, MaxConcurrent: maximum, JobLock: lock, VideoRuns: &kubernetes.VideoRunController{Runs: runs, Executor: executor}}, nil
+	executor := &kubernetes.StepExecutor{Runs: runs, Jobs: jobs, Store: store, Config: config, Artifacts: artifacts, MaxConcurrent: maximum, JobLock: lock}
+	return &kubernetes.Controller{Store: store, Jobs: jobs, Config: config, Artifacts: artifacts, MaxConcurrent: maximum, JobLock: lock, VideoRuns: &kubernetes.VideoRunController{Runs: runs, Executor: executor}}, nil
 }
 
 func parseJobTTL(value string) (*int32, error) {
