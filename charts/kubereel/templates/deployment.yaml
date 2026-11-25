@@ -35,29 +35,29 @@ spec:
               type: RuntimeDefault
           args: ["serve"]
           env:
-            - name: KUBEREEL_ARTIFACT_MAX_BYTES
+            - name: ARTIFACT_MAX_BYTES
               value: {{ printf "%d" (.Values.storage.maxArtifactBytes | int64) | quote }}
-            - name: KUBEREEL_ARTIFACT_RETENTION_SECONDS
+            - name: ARTIFACT_RETENTION_SECONDS
               value: {{ printf "%d" (.Values.storage.retentionSeconds | int64) | quote }}
-            - name: KUBEREEL_EXECUTION_MODE
+            - name: EXECUTION_MODE
               value: {{ .Values.execution.mode | quote }}
-            - name: KUBEREEL_NAMESPACE
+            - name: NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: KUBEREEL_JOB_IMAGE
+            - name: JOB_IMAGE
               value: {{ printf "%s:%s" .Values.image.repository (.Values.image.tag | toString) | quote }}
-            - name: KUBEREEL_IMAGE_PULL_POLICY
+            - name: IMAGE_PULL_POLICY
               value: {{ .Values.image.pullPolicy | quote }}
-            - name: KUBEREEL_PVC
+            - name: PVC_NAME
               value: {{ include "kubereel.claimName" . | quote }}
-            - name: KUBEREEL_INSTANCE
+            - name: INSTANCE_NAME
               value: {{ .Release.Name | quote }}
-            - name: KUBEREEL_SHARED_STORAGE
+            - name: SHARED_STORAGE
               value: {{ eq .Values.storage.accessMode "ReadWriteMany" | quote }}
-            - name: KUBEREEL_MAX_CONCURRENT
+            - name: MAX_CONCURRENT_JOBS
               value: {{ .Values.execution.maxConcurrentJobs | quote }}
-            - name: KUBEREEL_JOB_TTL_SECONDS
+            - name: JOB_TTL_SECONDS
               value: {{ .Values.execution.jobTTLSeconds | quote }}
           ports:
             - name: http

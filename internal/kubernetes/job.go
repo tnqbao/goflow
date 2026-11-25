@@ -1,4 +1,4 @@
-// Package kubernetes defines workload Jobs for the control plane.
+// Package kubernetes manages workload Jobs and VideoRun reconciliation.
 package kubernetes
 
 import (
@@ -9,14 +9,26 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/tnqbao/kubereel/internal/config"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-var workflowID = regexp.MustCompile(`^[a-f0-9]{32}$`)
+const (
+	StageWorker = "worker"
+	StageRender = "render"
 
+	defaultJobTTLSeconds int32 = 86400
+	containerUserID      int64 = 10001
+	dataVolumeName             = "data"
+	dataMountPath              = "/data"
+)
+
+var workflowIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+
+// JobConfig defines how temporary worker and render Jobs are constructed.
 type JobConfig struct {
 	Image                   string
 	Claim                   string
@@ -27,7 +39,7 @@ type JobConfig struct {
 	Artifacts               *ArtifactConfig
 }
 
-// ArtifactConfig is propagated to worker Jobs.
+// ArtifactConfig propagates storage bounds to worker and render Jobs.
 type ArtifactConfig struct {
 	MaxBytes         int64
 	RetentionSeconds int64
@@ -35,68 +47,223 @@ type ArtifactConfig struct {
 
 // Job builds a single worker or render Job using the control-plane image.
 // With RWO storage, pod affinity keeps workloads on the control-plane node.
-func Job(id, stage string, cfg JobConfig) (*batchv1.Job, error) {
-	if !workflowID.MatchString(id) {
-		return nil, fmt.Errorf("invalid workflow ID")
+func Job(workflowID, stage string, cfg JobConfig) (*batchv1.Job, error) {
+	normalizedCfg, ttlSeconds, err := validateAndNormalizeJobConfig(workflowID, stage, cfg)
+	if err != nil {
+		return nil, err
 	}
-	if stage != "worker" && stage != "render" {
-		return nil, fmt.Errorf("invalid workflow stage")
-	}
-	if cfg.Image == "" || cfg.Claim == "" || cfg.Instance == "" {
-		return nil, fmt.Errorf("image, claim and instance are required")
-	}
-	if cfg.PullPolicy == "" {
-		cfg.PullPolicy = corev1.PullIfNotPresent
-	}
-	if cfg.PullPolicy != corev1.PullIfNotPresent && cfg.PullPolicy != corev1.PullAlways && cfg.PullPolicy != corev1.PullNever {
-		return nil, fmt.Errorf("invalid image pull policy")
-	}
-	if !validArtifactConfig(cfg.Artifacts) {
-		return nil, fmt.Errorf("invalid artifact configuration")
-	}
-	root := path.Join("/data/workflows", id)
-	input, output := path.Join(root, "request.json"), path.Join(root, "scene.svg")
-	if stage == "render" {
-		input, output = output, path.Join(root, "final.svg")
-	}
-	var retries int32
-	ttl := int32(86400)
-	if cfg.TTLSecondsAfterFinished != nil {
-		ttl = *cfg.TTLSecondsAfterFinished
-	}
-	if ttl < 0 {
-		return nil, fmt.Errorf("job retention must not be negative")
-	}
-	user := int64(10001)
-	no := false
+
+	inputPath, outputPath := stageArtifactPaths(workflowID, stage)
+	var backoffLimit int32
+
 	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: "kubereel-" + id + "-" + stage, Labels: map[string]string{"app.kubernetes.io/name": "kubereel", "kubereel.io/workflow": id, "kubereel.io/stage": stage, "kubereel.io/instance": cfg.Instance}},
-		Spec: batchv1.JobSpec{BackoffLimit: &retries, TTLSecondsAfterFinished: &ttl, Template: corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app.kubernetes.io/name": "kubereel", "kubereel.io/workflow": id, "kubereel.io/instance": cfg.Instance}},
-			Spec: corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, AutomountServiceAccountToken: &no,
-				SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: boolPtr(true), RunAsUser: &user, RunAsGroup: &user, FSGroup: &user, SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
-				Containers: []corev1.Container{{Name: stage, Image: cfg.Image, ImagePullPolicy: cfg.PullPolicy, Args: []string{stage, "--input", input, "--output", output},
-					SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: &no, Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}},
-					Resources:       corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("128Mi")}, Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")}},
-					VolumeMounts:    []corev1.VolumeMount{{Name: "data", MountPath: "/data"}}}},
-				Volumes: []corev1.Volume{{Name: "data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: cfg.Claim}}}},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "kubereel-" + workflowID + "-" + stage,
+			Labels: map[string]string{
+				"app.kubernetes.io/name": "kubereel",
+				"kubereel.io/workflow":   workflowID,
+				"kubereel.io/stage":      stage,
+				"kubereel.io/instance":   normalizedCfg.Instance,
 			},
-		}},
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit:            &backoffLimit,
+			TTLSecondsAfterFinished: &ttlSeconds,
+			Template:                buildJobPodTemplate(workflowID, stage, inputPath, outputPath, normalizedCfg),
+		},
 	}
-	if cfg.Artifacts != nil {
-		job.Spec.Template.Spec.Containers[0].Env = []corev1.EnvVar{
-			{Name: "KUBEREEL_ARTIFACT_MAX_BYTES", Value: strconv.FormatInt(cfg.Artifacts.MaxBytes, 10)},
-			{Name: "KUBEREEL_ARTIFACT_RETENTION_SECONDS", Value: strconv.FormatInt(cfg.Artifacts.RetentionSeconds, 10)},
-		}
-	}
-	if !cfg.SharedStorage {
-		job.Spec.Template.Spec.Affinity = &corev1.Affinity{PodAffinity: &corev1.PodAffinity{RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubereel.io/control-plane": cfg.Instance}}, TopologyKey: "kubernetes.io/hostname"}}}}
-	}
+
 	return job, nil
 }
 
-func validArtifactConfig(config *ArtifactConfig) bool {
-	return config == nil || (config.MaxBytes > 0 && config.MaxBytes <= 9007199254740991 && config.RetentionSeconds >= 0 && config.RetentionSeconds <= math.MaxInt64/int64(time.Second))
+func validateAndNormalizeJobConfig(workflowID, stage string, cfg JobConfig) (JobConfig, int32, error) {
+	if !workflowIDPattern.MatchString(workflowID) {
+		return JobConfig{}, 0, fmt.Errorf("invalid workflow ID")
+	}
+
+	if stage != StageWorker && stage != StageRender {
+		return JobConfig{}, 0, fmt.Errorf("invalid workflow stage")
+	}
+
+	if cfg.Image == "" || cfg.Claim == "" || cfg.Instance == "" {
+		return JobConfig{}, 0, fmt.Errorf("image, claim and instance are required")
+	}
+
+	if cfg.PullPolicy == "" {
+		cfg.PullPolicy = corev1.PullIfNotPresent
+	}
+
+	if !isValidPullPolicy(cfg.PullPolicy) {
+		return JobConfig{}, 0, fmt.Errorf("invalid image pull policy")
+	}
+
+	if !isValidArtifactConfig(cfg.Artifacts) {
+		return JobConfig{}, 0, fmt.Errorf("invalid artifact configuration")
+	}
+
+	ttlSeconds := defaultJobTTLSeconds
+	if cfg.TTLSecondsAfterFinished != nil {
+		ttlSeconds = *cfg.TTLSecondsAfterFinished
+	}
+
+	if ttlSeconds < 0 {
+		return JobConfig{}, 0, fmt.Errorf("job retention must not be negative")
+	}
+
+	return cfg, ttlSeconds, nil
 }
 
-func boolPtr(v bool) *bool { return &v }
+func isValidPullPolicy(policy corev1.PullPolicy) bool {
+	return policy == corev1.PullIfNotPresent ||
+		policy == corev1.PullAlways ||
+		policy == corev1.PullNever
+}
+
+func isValidArtifactConfig(cfg *ArtifactConfig) bool {
+	if cfg == nil {
+		return true
+	}
+
+	maxValidRetention := math.MaxInt64 / int64(time.Second)
+
+	return cfg.MaxBytes > 0 &&
+		cfg.MaxBytes <= config.MaxArtifactBytesLimit &&
+		cfg.RetentionSeconds >= 0 &&
+		cfg.RetentionSeconds <= maxValidRetention
+}
+
+func stageArtifactPaths(workflowID, stage string) (string, string) {
+	workflowDir := path.Join(dataMountPath, "workflows", workflowID)
+	scenePath := path.Join(workflowDir, "scene.svg")
+
+	if stage == StageRender {
+		return scenePath, path.Join(workflowDir, "final.svg")
+	}
+
+	return path.Join(workflowDir, "request.json"), scenePath
+}
+
+func buildJobPodTemplate(workflowID, stage, inputPath, outputPath string, cfg JobConfig) corev1.PodTemplateSpec {
+	podSpec := corev1.PodSpec{
+		RestartPolicy:                corev1.RestartPolicyNever,
+		AutomountServiceAccountToken: boolPtr(false),
+		SecurityContext:              newPodSecurityContext(),
+		Containers: []corev1.Container{
+			buildJobContainer(stage, inputPath, outputPath, cfg),
+		},
+		Volumes: []corev1.Volume{
+			{
+				Name: dataVolumeName,
+				VolumeSource: corev1.VolumeSource{
+					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+						ClaimName: cfg.Claim,
+					},
+				},
+			},
+		},
+	}
+
+	if !cfg.SharedStorage {
+		podSpec.Affinity = controlPlanePodAffinity(cfg.Instance)
+	}
+
+	return corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{
+				"app.kubernetes.io/name": "kubereel",
+				"kubereel.io/workflow":   workflowID,
+				"kubereel.io/instance":   cfg.Instance,
+			},
+		},
+		Spec: podSpec,
+	}
+}
+
+func buildJobContainer(stage, inputPath, outputPath string, cfg JobConfig) corev1.Container {
+	container := corev1.Container{
+		Name:            stage,
+		Image:           cfg.Image,
+		ImagePullPolicy: cfg.PullPolicy,
+		Args:            []string{stage, "--input", inputPath, "--output", outputPath},
+		SecurityContext: newContainerSecurityContext(),
+		Resources:       defaultJobResources(),
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      dataVolumeName,
+				MountPath: dataMountPath,
+			},
+		},
+	}
+
+	if cfg.Artifacts != nil {
+		container.Env = []corev1.EnvVar{
+			{
+				Name:  config.EnvArtifactMaxBytes,
+				Value: strconv.FormatInt(cfg.Artifacts.MaxBytes, 10),
+			},
+			{
+				Name:  config.EnvArtifactRetentionSeconds,
+				Value: strconv.FormatInt(cfg.Artifacts.RetentionSeconds, 10),
+			},
+		}
+	}
+
+	return container
+}
+
+func newPodSecurityContext() *corev1.PodSecurityContext {
+	uid := containerUserID
+
+	return &corev1.PodSecurityContext{
+		RunAsNonRoot: boolPtr(true),
+		RunAsUser:    &uid,
+		RunAsGroup:   &uid,
+		FSGroup:      &uid,
+		SeccompProfile: &corev1.SeccompProfile{
+			Type: corev1.SeccompProfileTypeRuntimeDefault,
+		},
+	}
+}
+
+func newContainerSecurityContext() *corev1.SecurityContext {
+	return &corev1.SecurityContext{
+		AllowPrivilegeEscalation: boolPtr(false),
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{"ALL"},
+		},
+	}
+}
+
+func defaultJobResources() corev1.ResourceRequirements {
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("100m"),
+			corev1.ResourceMemory: resource.MustParse("128Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("1"),
+			corev1.ResourceMemory: resource.MustParse("512Mi"),
+		},
+	}
+}
+
+func controlPlanePodAffinity(instance string) *corev1.Affinity {
+	return &corev1.Affinity{
+		PodAffinity: &corev1.PodAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{
+				{
+					LabelSelector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{
+							"kubereel.io/control-plane": instance,
+						},
+					},
+					TopologyKey: "kubernetes.io/hostname",
+				},
+			},
+		},
+	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}

@@ -21,6 +21,9 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 )
 
+const reconcileInterval = 2 * time.Second
+
+// Jobs abstracts the Kubernetes Job client operations used by controllers.
 type Jobs interface {
 	Create(context.Context, *batchv1.Job, metav1.CreateOptions) (*batchv1.Job, error)
 	Get(context.Context, string, metav1.GetOptions) (*batchv1.Job, error)
@@ -29,6 +32,7 @@ type Jobs interface {
 	Watch(context.Context, metav1.ListOptions) (watch.Interface, error)
 }
 
+// Controller reconciles durable workflow executions and runs the VideoRun controller.
 type Controller struct {
 	Store         *workflow.Store
 	Jobs          Jobs
@@ -39,7 +43,7 @@ type Controller struct {
 	JobLock       *sync.Mutex
 }
 
-// Run reconciles durable workflow state until the control plane stops.
+// Run reconciles durable workflow state until ctx is cancelled.
 func (c *Controller) Run(ctx context.Context) {
 	if c.VideoRuns != nil {
 		done := make(chan struct{})
@@ -49,12 +53,15 @@ func (c *Controller) Run(ctx context.Context) {
 		}()
 		defer func() { <-done }()
 	}
-	ticker := time.NewTicker(2 * time.Second)
+
+	ticker := time.NewTicker(reconcileInterval)
 	defer ticker.Stop()
+
 	for {
 		if err := c.Reconcile(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("workflow reconciliation failed", "error", err)
 		}
+
 		select {
 		case <-ctx.Done():
 			return
@@ -63,203 +70,270 @@ func (c *Controller) Run(ctx context.Context) {
 	}
 }
 
+// Reconcile advances queued and running workflows while respecting MaxConcurrent.
 func (c *Controller) Reconcile(ctx context.Context) error {
 	if c.Store == nil || c.Jobs == nil || c.Artifacts == nil || c.MaxConcurrent < 1 {
 		return fmt.Errorf("invalid workflow controller configuration")
 	}
+
 	if c.JobLock != nil {
 		c.JobLock.Lock()
 		defer c.JobLock.Unlock()
 	}
-	videoJobs, err := activeVideoJobs(ctx, c.Jobs, c.Config.Instance)
+
+	activeVideoRunJobs, err := countActiveVideoRunJobs(ctx, c.Jobs, c.Config.Instance)
 	if err != nil {
 		return err
 	}
-	active, err := c.Store.Active(ctx)
+
+	activeWorkflows, err := c.Store.Active(ctx)
 	if err != nil {
 		return err
 	}
-	running := videoJobs
-	for _, w := range active {
-		if w.Status == "running" {
-			running++
-		}
-	}
+
+	runningCount := activeVideoRunJobs + countRunningWorkflows(activeWorkflows)
+
 	var failures []error
-	for _, w := range active {
-		if w.Status == "queued" && running >= c.MaxConcurrent {
+	for _, wf := range activeWorkflows {
+		if wf.Status == "queued" && runningCount >= c.MaxConcurrent {
 			continue
 		}
-		if err := c.reconcileOne(ctx, w); err != nil {
-			failures = append(failures, fmt.Errorf("workflow %s: %w", w.ID, err))
+
+		if err := c.reconcileWorkflow(ctx, wf); err != nil {
+			failures = append(failures, fmt.Errorf("workflow %s: %w", wf.ID, err))
 			continue
 		}
-		if w.Status == "queued" {
-			running++
+
+		if wf.Status == "queued" {
+			runningCount++
 		}
 	}
+
 	return errors.Join(failures...)
 }
 
-func (c *Controller) reconcileOne(ctx context.Context, w workflow.Workflow) error {
-	if w.Status == "queued" {
-		return c.start(ctx, w)
+func countRunningWorkflows(workflows []workflow.Workflow) int {
+	count := 0
+	for _, wf := range workflows {
+		if wf.Status == "running" {
+			count++
+		}
 	}
-	worker, err := c.getJob(ctx, w.ID, "worker")
+
+	return count
+}
+
+func (c *Controller) reconcileWorkflow(ctx context.Context, wf workflow.Workflow) error {
+	if wf.Status == "queued" {
+		return c.startWorkflow(ctx, wf)
+	}
+
+	workerJob, err := c.getVerifiedJob(ctx, wf.ID, StageWorker)
 	if apierrors.IsNotFound(err) {
-		return c.fail(ctx, w.ID, "worker job disappeared")
+		return c.failWorkflow(ctx, wf.ID, "worker job disappeared")
 	}
 	if err != nil {
 		return err
 	}
-	if finished(worker, batchv1.JobFailed) {
-		return c.fail(ctx, w.ID, "worker job failed")
+
+	if hasJobCondition(workerJob, batchv1.JobFailed) {
+		return c.failWorkflow(ctx, wf.ID, "worker job failed")
 	}
-	if !finished(worker, batchv1.JobComplete) {
+	if !hasJobCondition(workerJob, batchv1.JobComplete) {
 		return nil
 	}
-	render, err := c.ensureJob(ctx, w.ID, "render")
+
+	renderJob, err := c.ensureJob(ctx, wf.ID, StageRender)
 	if err != nil {
 		return err
 	}
-	if finished(render, batchv1.JobFailed) {
-		return c.fail(ctx, w.ID, "render job failed")
+
+	if hasJobCondition(renderJob, batchv1.JobFailed) {
+		return c.failWorkflow(ctx, wf.ID, "render job failed")
 	}
-	if !finished(render, batchv1.JobComplete) {
+	if !hasJobCondition(renderJob, batchv1.JobComplete) {
 		return nil
 	}
-	output := filepath.Join("workflows", w.ID, "final.svg")
-	object, err := c.Artifacts.Open(ctx, output)
+
+	return c.completeWorkflow(ctx, wf.ID)
+}
+
+func (c *Controller) completeWorkflow(ctx context.Context, workflowID string) error {
+	outputPath := filepath.Join("workflows", workflowID, "final.svg")
+
+	failureReason, err := c.checkRenderedArtifact(ctx, outputPath)
+	if err != nil {
+		return err
+	}
+	if failureReason != "" {
+		return c.failWorkflow(ctx, workflowID, failureReason)
+	}
+
+	if err := c.Store.Transition(ctx, workflowID, "running", "succeeded", outputPath, ""); err != nil {
+		return err
+	}
+
+	return c.cleanupWorkflowJobs(ctx, workflowID)
+}
+
+func (c *Controller) checkRenderedArtifact(ctx context.Context, outputPath string) (string, error) {
+	object, err := c.Artifacts.Open(ctx, outputPath)
 	if errors.Is(err, fs.ErrNotExist) {
-		return c.fail(ctx, w.ID, "render output is missing")
+		return "render output is missing", nil
 	}
 	if err != nil {
-		return fmt.Errorf("inspect render output: %w", err)
+		return "", fmt.Errorf("inspect render output: %w", err)
 	}
+
 	info, statErr := object.Stat()
 	if err := errors.Join(statErr, object.Close()); err != nil {
-		return fmt.Errorf("inspect render output: %w", err)
+		return "", fmt.Errorf("inspect render output: %w", err)
 	}
+
 	if info.Size() == 0 {
-		return c.fail(ctx, w.ID, "render output is invalid")
+		return "render output is invalid", nil
 	}
-	if err := c.Store.Transition(ctx, w.ID, "running", "succeeded", filepath.Join("workflows", w.ID, "final.svg"), ""); err != nil {
-		return err
-	}
-	return c.cleanup(ctx, w.ID)
+
+	return "", nil
 }
 
-func (c *Controller) start(ctx context.Context, w workflow.Workflow) error {
-	if err := writeRequest(ctx, c.Artifacts, w); err != nil {
+func (c *Controller) startWorkflow(ctx context.Context, wf workflow.Workflow) error {
+	if err := publishMockRequest(ctx, c.Artifacts, wf.ID, wf.Prompt); err != nil {
 		return err
 	}
-	if _, err := c.ensureJob(ctx, w.ID, "worker"); err != nil {
+
+	if _, err := c.ensureJob(ctx, wf.ID, StageWorker); err != nil {
 		return err
 	}
-	return c.Store.Transition(ctx, w.ID, "queued", "running", "", "")
+
+	return c.Store.Transition(ctx, wf.ID, "queued", "running", "", "")
 }
 
-func (c *Controller) fail(ctx context.Context, id, message string) error {
-	if err := c.Store.Transition(ctx, id, "running", "failed", "", message); err != nil {
+func (c *Controller) failWorkflow(ctx context.Context, workflowID, reason string) error {
+	if err := c.Store.Transition(ctx, workflowID, "running", "failed", "", reason); err != nil {
 		return err
 	}
-	return c.cleanup(ctx, id)
+
+	return c.cleanupWorkflowJobs(ctx, workflowID)
 }
 
-func (c *Controller) cleanup(ctx context.Context, id string) error {
+func (c *Controller) cleanupWorkflowJobs(ctx context.Context, workflowID string) error {
 	policy := metav1.DeletePropagationBackground
+
 	var failures []error
-	for _, stage := range []string{"worker", "render"} {
-		job, err := Job(id, stage, c.Config)
+	for _, stage := range []string{StageWorker, StageRender} {
+		job, err := Job(workflowID, stage, c.Config)
 		if err != nil {
 			return err
 		}
+
 		err = c.Jobs.Delete(ctx, job.Name, metav1.DeleteOptions{PropagationPolicy: &policy})
 		if err != nil && !apierrors.IsNotFound(err) {
 			failures = append(failures, fmt.Errorf("delete %s job: %w", stage, err))
 		}
 	}
+
 	return errors.Join(failures...)
 }
 
-func finished(job *batchv1.Job, kind batchv1.JobConditionType) bool {
+func hasJobCondition(job *batchv1.Job, conditionType batchv1.JobConditionType) bool {
 	for _, condition := range job.Status.Conditions {
-		if condition.Type == kind && condition.Status == "True" {
+		if condition.Type == conditionType && condition.Status == "True" {
 			return true
 		}
 	}
+
 	return false
 }
 
-func (c *Controller) getJob(ctx context.Context, id, stage string) (*batchv1.Job, error) {
-	expected, err := Job(id, stage, c.Config)
+func isJobTerminal(job *batchv1.Job) bool {
+	return hasJobCondition(job, batchv1.JobComplete) || hasJobCondition(job, batchv1.JobFailed)
+}
+
+func (c *Controller) getVerifiedJob(ctx context.Context, workflowID, stage string) (*batchv1.Job, error) {
+	expected, err := Job(workflowID, stage, c.Config)
 	if err != nil {
 		return nil, err
 	}
+
 	actual, err := c.Jobs.Get(ctx, expected.Name, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
-	if err := validateJob(actual, expected); err != nil {
+
+	if err := validateJobIdentity(actual, expected); err != nil {
 		return nil, err
 	}
+
 	return actual, nil
 }
 
-func (c *Controller) ensureJob(ctx context.Context, id, stage string) (*batchv1.Job, error) {
-	job, err := c.getJob(ctx, id, stage)
+func (c *Controller) ensureJob(ctx context.Context, workflowID, stage string) (*batchv1.Job, error) {
+	existing, err := c.getVerifiedJob(ctx, workflowID, stage)
 	if err == nil {
-		return job, nil
+		return existing, nil
 	}
 	if !apierrors.IsNotFound(err) {
 		return nil, err
 	}
-	desired, err := Job(id, stage, c.Config)
+
+	desired, err := Job(workflowID, stage, c.Config)
 	if err != nil {
 		return nil, err
 	}
+
 	created, err := c.Jobs.Create(ctx, desired, metav1.CreateOptions{})
 	if apierrors.IsAlreadyExists(err) {
-		return c.getJob(ctx, id, stage)
+		return c.getVerifiedJob(ctx, workflowID, stage)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("create %s job: %w", stage, err)
 	}
+
 	return created, nil
 }
 
-func validateJob(actual, expected *batchv1.Job) error {
-	for key, value := range expected.Labels {
-		if actual.Labels[key] != value {
+func validateJobIdentity(actual, expected *batchv1.Job) error {
+	for key, expectedValue := range expected.Labels {
+		if actual.Labels[key] != expectedValue {
 			return fmt.Errorf("job identity mismatch")
 		}
 	}
+
 	if len(actual.Spec.Template.Spec.Containers) != 1 {
 		return fmt.Errorf("job container mismatch")
 	}
-	container := actual.Spec.Template.Spec.Containers[0]
-	wanted := expected.Spec.Template.Spec.Containers[0]
-	if container.Image != wanted.Image || len(container.Args) != len(wanted.Args) {
+
+	actualContainer := actual.Spec.Template.Spec.Containers[0]
+	expectedContainer := expected.Spec.Template.Spec.Containers[0]
+
+	if actualContainer.Image != expectedContainer.Image || len(actualContainer.Args) != len(expectedContainer.Args) {
 		return fmt.Errorf("job configuration mismatch")
 	}
-	for i, arg := range wanted.Args {
-		if container.Args[i] != arg {
+
+	for index, expectedArg := range expectedContainer.Args {
+		if actualContainer.Args[index] != expectedArg {
 			return fmt.Errorf("job command mismatch")
 		}
 	}
+
 	return nil
 }
 
-func writeRequest(ctx context.Context, artifacts storage.Store, w workflow.Workflow) error {
-	if !workflowID.MatchString(w.ID) {
+func publishMockRequest(ctx context.Context, artifacts storage.Store, workflowID, prompt string) error {
+	if !workflowIDPattern.MatchString(workflowID) {
 		return fmt.Errorf("invalid workflow ID")
 	}
-	data, err := json.Marshal(mock.Request{Prompt: w.Prompt})
+
+	payload, err := json.Marshal(mock.Request{Prompt: prompt})
 	if err != nil {
 		return fmt.Errorf("encode workflow request: %w", err)
 	}
-	if err := artifacts.Put(ctx, filepath.ToSlash(filepath.Join("workflows", w.ID, "request.json")), bytes.NewReader(data)); err != nil {
+
+	requestKey := filepath.ToSlash(filepath.Join("workflows", workflowID, "request.json"))
+	if err := artifacts.Put(ctx, requestKey, bytes.NewReader(payload)); err != nil {
 		return fmt.Errorf("publish workflow request: %w", err)
 	}
+
 	return nil
 }

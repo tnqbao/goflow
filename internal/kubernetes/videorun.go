@@ -22,110 +22,166 @@ import (
 	"k8s.io/client-go/util/workqueue"
 )
 
-// VideoRunResource identifies the VideoRun API resource.
+const informerResyncPeriod = time.Minute
+
+// VideoRunResource identifies the VideoRun Custom Resource in the kubereel.io group.
 func VideoRunResource() schema.GroupVersionResource {
-	return schema.GroupVersionResource{Group: "kubereel.io", Version: "v1alpha1", Resource: "videoruns"}
+	return schema.GroupVersionResource{
+		Group:    "kubereel.io",
+		Version:  "v1alpha1",
+		Resource: "videoruns",
+	}
 }
 
-// VideoRunController validates workflow snapshots and records ready steps.
+// VideoRunController validates workflow snapshots and reconciles VideoRun executions.
 type VideoRunController struct {
 	Runs     dynamic.ResourceInterface
 	Executor *StepExecutor
 }
 
-// Run watches VideoRuns until the context is cancelled.
+// Run watches VideoRuns and owned Jobs until ctx is cancelled.
 func (c *VideoRunController) Run(ctx context.Context) {
-	queue := workqueue.NewTypedRateLimitingQueueWithConfig(workqueue.DefaultTypedControllerRateLimiter[string](), workqueue.TypedRateLimitingQueueConfig[string]{Name: "videoruns"})
+	queue := workqueue.NewTypedRateLimitingQueueWithConfig(
+		workqueue.DefaultTypedControllerRateLimiter[string](),
+		workqueue.TypedRateLimitingQueueConfig[string]{Name: "videoruns"},
+	)
 	defer queue.ShutDown()
-	informer := cache.NewSharedIndexInformer(&cache.ListWatch{
-		ListFunc:  func(options metav1.ListOptions) (runtime.Object, error) { return c.Runs.List(ctx, options) },
-		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) { return c.Runs.Watch(ctx, options) },
-	}, &unstructured.Unstructured{}, time.Minute, nil)
-	enqueue := func(object interface{}) {
-		key, err := cache.MetaNamespaceKeyFunc(object)
+
+	runInformer, err := c.newVideoRunInformer(ctx, queue)
+	if err != nil {
+		slog.Error("register VideoRun event handler", "error", err)
+		return
+	}
+
+	var jobInformer cache.SharedIndexInformer
+	if c.Executor != nil {
+		jobInformer, err = c.newJobInformer(ctx, runInformer, queue)
+		if err != nil {
+			slog.Error("register VideoRun job event handler", "error", err)
+			return
+		}
+	}
+
+	if jobInformer != nil {
+		go jobInformer.Run(ctx.Done())
+	}
+	go runInformer.Run(ctx.Done())
+
+	if !cache.WaitForCacheSync(ctx.Done(), runInformer.HasSynced) {
+		return
+	}
+	if jobInformer != nil && !cache.WaitForCacheSync(ctx.Done(), jobInformer.HasSynced) {
+		return
+	}
+
+	go func() {
+		<-ctx.Done()
+		queue.ShutDown()
+	}()
+
+	for c.processNextWorkItem(ctx, queue) {
+	}
+}
+
+func (c *VideoRunController) newVideoRunInformer(
+	ctx context.Context,
+	queue workqueue.TypedRateLimitingInterface[string],
+) (cache.SharedIndexInformer, error) {
+	informer := cache.NewSharedIndexInformer(
+		&cache.ListWatch{
+			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
+				return c.Runs.List(ctx, options)
+			},
+			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
+				return c.Runs.Watch(ctx, options)
+			},
+		},
+		&unstructured.Unstructured{},
+		informerResyncPeriod,
+		nil,
+	)
+
+	enqueueRun := func(obj interface{}) {
+		key, err := cache.MetaNamespaceKeyFunc(obj)
 		if err != nil {
 			slog.Error("queue VideoRun", "error", err)
 			return
 		}
 		queue.Add(key)
 	}
-	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    enqueue,
-		UpdateFunc: func(_, current interface{}) { enqueue(current) },
-	})
-	if err != nil {
-		slog.Error("register VideoRun event handler", "error", err)
-		return
-	}
-	var jobInformer cache.SharedIndexInformer
-	if c.Executor != nil {
-		jobInformer, err = c.jobInformer(ctx, informer, queue)
-	}
-	if err != nil {
-		slog.Error("register VideoRun job event handler", "error", err)
-		return
-	}
-	if jobInformer != nil {
-		go jobInformer.Run(ctx.Done())
-	}
-	go informer.Run(ctx.Done())
-	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
-		return
-	}
-	if jobInformer != nil && !cache.WaitForCacheSync(ctx.Done(), jobInformer.HasSynced) {
-		return
-	}
-	go func() {
-		<-ctx.Done()
-		queue.ShutDown()
-	}()
-	for c.process(ctx, queue) {
-	}
-}
 
-func (c *VideoRunController) jobInformer(ctx context.Context, runs cache.SharedIndexInformer, queue workqueue.TypedRateLimitingInterface[string]) (cache.SharedIndexInformer, error) {
-	selector := "kubereel.io/instance=" + c.Executor.Config.Instance
-	informer := cache.NewSharedIndexInformer(&cache.ListWatch{
-		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
-			options.LabelSelector = selector
-			return c.Executor.Jobs.List(ctx, options)
-		},
-		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
-			options.LabelSelector = selector
-			return c.Executor.Jobs.Watch(ctx, options)
-		},
-	}, &batchv1.Job{}, 0, nil)
-	enqueue := func(_ interface{}) {
-		for _, key := range runs.GetStore().ListKeys() {
-			queue.Add(key)
-		}
-	}
 	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: enqueue, UpdateFunc: func(_, current interface{}) { enqueue(current) }, DeleteFunc: enqueue,
+		AddFunc:    enqueueRun,
+		UpdateFunc: func(_, current interface{}) { enqueueRun(current) },
 	})
+
 	return informer, err
 }
 
-func (c *VideoRunController) process(ctx context.Context, queue workqueue.TypedRateLimitingInterface[string]) bool {
-	item, shutdown := queue.Get()
+func (c *VideoRunController) newJobInformer(
+	ctx context.Context,
+	runInformer cache.SharedIndexInformer,
+	queue workqueue.TypedRateLimitingInterface[string],
+) (cache.SharedIndexInformer, error) {
+	selector := "kubereel.io/instance=" + c.Executor.Config.Instance
+
+	informer := cache.NewSharedIndexInformer(
+		&cache.ListWatch{
+			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
+				options.LabelSelector = selector
+				return c.Executor.Jobs.List(ctx, options)
+			},
+			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
+				options.LabelSelector = selector
+				return c.Executor.Jobs.Watch(ctx, options)
+			},
+		},
+		&batchv1.Job{},
+		0,
+		nil,
+	)
+
+	enqueueAllRuns := func(_ interface{}) {
+		for _, key := range runInformer.GetStore().ListKeys() {
+			queue.Add(key)
+		}
+	}
+
+	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    enqueueAllRuns,
+		UpdateFunc: func(_, current interface{}) { enqueueAllRuns(current) },
+		DeleteFunc: enqueueAllRuns,
+	})
+
+	return informer, err
+}
+
+func (c *VideoRunController) processNextWorkItem(
+	ctx context.Context,
+	queue workqueue.TypedRateLimitingInterface[string],
+) bool {
+	itemKey, shutdown := queue.Get()
 	if shutdown {
 		return false
 	}
-	defer queue.Done(item)
-	_, name, err := cache.SplitMetaNamespaceKey(item)
+	defer queue.Done(itemKey)
+
+	_, runName, err := cache.SplitMetaNamespaceKey(itemKey)
 	if err == nil {
-		err = c.Reconcile(ctx, name)
+		err = c.Reconcile(ctx, runName)
 	}
+
 	if err == nil || errors.Is(err, context.Canceled) {
-		queue.Forget(item)
+		queue.Forget(itemKey)
 		return true
 	}
-	slog.Error("reconcile VideoRun", "key", item, "error", err)
-	queue.AddRateLimited(item)
+
+	slog.Error("reconcile VideoRun", "key", itemKey, "error", err)
+	queue.AddRateLimited(itemKey)
 	return true
 }
 
-// Reconcile updates a single VideoRun using the current resource version.
+// Reconcile updates a single VideoRun using its current resource version.
 func (c *VideoRunController) Reconcile(ctx context.Context, name string) error {
 	run, err := c.Runs.Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
@@ -134,78 +190,85 @@ func (c *VideoRunController) Reconcile(ctx context.Context, name string) error {
 	if err != nil {
 		return fmt.Errorf("get VideoRun: %w", err)
 	}
+
 	if run.GetDeletionTimestamp() != nil {
 		return nil
 	}
+
 	phase, _, err := unstructured.NestedString(run.Object, "status", "phase")
 	if err != nil {
 		return err
 	}
+
 	if phase == "Succeeded" && c.Executor != nil {
 		return c.Executor.cleanupArtifacts(ctx, run, time.Now())
 	}
-	cancelled, _, err := unstructured.NestedBool(run.Object, "spec", "cancelRequested")
+
+	cancelRequested, _, err := unstructured.NestedBool(run.Object, "spec", "cancelRequested")
 	if err != nil {
 		return err
 	}
-	if cancelled && c.Executor != nil {
+
+	if cancelRequested {
+		if c.Executor == nil {
+			return nil
+		}
 		return c.Executor.Cancel(ctx, run)
 	}
-	if cancelled {
-		return nil
-	}
+
 	if c.Executor != nil && (phase == "Failed" || phase == "RequiresReview" || phase == "Cancelling") {
 		return c.Executor.Cancel(ctx, run)
 	}
+
 	if phase != "" && phase != "Pending" && phase != "Running" {
 		return nil
 	}
-	status, err := videoRunStatus(run)
+
+	desiredStatus, err := computeVideoRunStatus(run)
 	if err != nil {
 		return err
 	}
-	current, _, err := unstructured.NestedMap(run.Object, "status")
+
+	currentStatus, _, err := unstructured.NestedMap(run.Object, "status")
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(current, status) {
-		return updateVideoRunStatus(ctx, c.Runs, run, status)
+
+	if !reflect.DeepEqual(currentStatus, desiredStatus) {
+		return updateVideoRunStatus(ctx, c.Runs, run, desiredStatus)
 	}
+
 	if c.Executor == nil {
 		return nil
 	}
-	return c.Executor.Reconcile(ctx, run, status)
+
+	return c.Executor.Reconcile(ctx, run, desiredStatus)
 }
 
-func updateVideoRunStatus(ctx context.Context, runs dynamic.ResourceInterface, run *unstructured.Unstructured, status map[string]interface{}) error {
+func updateVideoRunStatus(
+	ctx context.Context,
+	runs dynamic.ResourceInterface,
+	run *unstructured.Unstructured,
+	status map[string]interface{},
+) error {
 	updated := run.DeepCopy()
 	if err := unstructured.SetNestedMap(updated.Object, status, "status"); err != nil {
 		return err
 	}
+
 	if _, err := runs.UpdateStatus(ctx, updated, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("update VideoRun status: %w", err)
 	}
+
 	return nil
 }
 
-func videoRunStatus(run *unstructured.Unstructured) (map[string]interface{}, error) {
-	snapshot, found, err := unstructured.NestedMap(run.Object, "spec", "workflowSnapshot")
+func computeVideoRunStatus(run *unstructured.Unstructured) (map[string]interface{}, error) {
+	dagSteps, err := decodeSnapshotDAGSteps(run)
 	if err != nil {
-		return nil, fmt.Errorf("read workflow snapshot: %w", err)
+		return nil, err
 	}
-	if !found {
-		return nil, fmt.Errorf("workflow snapshot is missing")
-	}
-	data, err := json.Marshal(snapshot)
-	if err != nil {
-		return nil, fmt.Errorf("encode workflow snapshot: %w", err)
-	}
-	var graph struct {
-		Steps []workflow.DAGStep `json:"steps"`
-	}
-	if err := json.Unmarshal(data, &graph); err != nil {
-		return nil, fmt.Errorf("decode workflow snapshot: %w", err)
-	}
+
 	status, _, err := unstructured.NestedMap(run.Object, "status")
 	if err != nil {
 		return nil, err
@@ -213,47 +276,86 @@ func videoRunStatus(run *unstructured.Unstructured) (map[string]interface{}, err
 	if status == nil {
 		status = make(map[string]interface{})
 	}
-	if err := workflow.ValidateDAG(graph.Steps); err != nil {
+
+	if err := workflow.ValidateDAG(dagSteps); err != nil {
 		status["phase"] = "Failed"
 		status["error"] = err.Error()
 		return status, nil
 	}
+
 	if status["phase"] == nil || status["phase"] == "" {
 		status["phase"] = "Pending"
 	}
-	steps, _, err := unstructured.NestedSlice(status, "steps")
+
+	stepEntries, byName, err := stepStatuses(status)
 	if err != nil {
 		return nil, err
 	}
-	byName := make(map[string]map[string]interface{}, len(steps))
-	for _, item := range steps {
-		step, ok := item.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("invalid step status")
-		}
-		name, ok := step["name"].(string)
-		if !ok {
-			return nil, fmt.Errorf("invalid step status name")
-		}
-		byName[name] = step
+
+	stepEntries = ensureStepEntries(dagSteps, stepEntries, byName)
+	refreshStepReadiness(dagSteps, byName)
+
+	status["steps"] = stepEntries
+	return status, nil
+}
+
+func decodeSnapshotDAGSteps(run *unstructured.Unstructured) ([]workflow.DAGStep, error) {
+	snapshot, found, err := unstructured.NestedMap(run.Object, "spec", "workflowSnapshot")
+	if err != nil {
+		return nil, fmt.Errorf("read workflow snapshot: %w", err)
 	}
-	for _, step := range graph.Steps {
-		if _, exists := byName[step.Name]; !exists {
-			entry := map[string]interface{}{"name": step.Name, "phase": "Pending"}
-			byName[step.Name] = entry
-			steps = append(steps, entry)
-		}
+	if !found {
+		return nil, fmt.Errorf("workflow snapshot is missing")
 	}
-	for _, step := range graph.Steps {
+
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("encode workflow snapshot: %w", err)
+	}
+
+	var graph struct {
+		Steps []workflow.DAGStep `json:"steps"`
+	}
+	if err := json.Unmarshal(data, &graph); err != nil {
+		return nil, fmt.Errorf("decode workflow snapshot: %w", err)
+	}
+
+	return graph.Steps, nil
+}
+
+func ensureStepEntries(
+	dagSteps []workflow.DAGStep,
+	stepEntries []interface{},
+	byName map[string]map[string]interface{},
+) []interface{} {
+	for _, step := range dagSteps {
+		if _, exists := byName[step.Name]; exists {
+			continue
+		}
+
+		entry := map[string]interface{}{
+			"name":  step.Name,
+			"phase": "Pending",
+		}
+		byName[step.Name] = entry
+		stepEntries = append(stepEntries, entry)
+	}
+
+	return stepEntries
+}
+
+func refreshStepReadiness(dagSteps []workflow.DAGStep, byName map[string]map[string]interface{}) {
+	for _, step := range dagSteps {
 		entry := byName[step.Name]
 		ready := entry["phase"] == "Pending"
+
 		for _, dependency := range step.DependsOn {
 			if byName[dependency]["phase"] != "Succeeded" {
 				ready = false
+				break
 			}
 		}
+
 		entry["ready"] = ready
 	}
-	status["steps"] = steps
-	return status, nil
 }

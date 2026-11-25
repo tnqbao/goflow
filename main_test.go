@@ -17,8 +17,9 @@ import (
 	"github.com/tnqbao/kubereel/internal/config"
 )
 
-func TestRoutes(t *testing.T) {
-	db := testDB(t)
+func TestBaseRoutes(t *testing.T) {
+	db := openTestDatabase(t)
+
 	tests := []struct {
 		method string
 		path   string
@@ -40,7 +41,7 @@ func TestRoutes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			routes(db).ServeHTTP(recorder, httptest.NewRequest(tt.method, tt.path, nil))
+			newBaseMux(db).ServeHTTP(recorder, httptest.NewRequest(tt.method, tt.path, nil))
 			if recorder.Code != tt.status {
 				t.Errorf("status = %d, want %d", recorder.Code, tt.status)
 			}
@@ -48,23 +49,25 @@ func TestRoutes(t *testing.T) {
 	}
 }
 
-func TestRunListenError(t *testing.T) {
+func TestRunServerListenError(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer listener.Close()
 
-	cfg := testConfig(t)
+	cfg := newTestConfig(t)
 	cfg.Address = listener.Addr().String()
-	if err := run(context.Background(), cfg); err == nil {
-		t.Fatal("run succeeded on an occupied address")
+
+	if err := runServer(context.Background(), cfg); err == nil {
+		t.Fatal("runServer succeeded on an occupied address")
 	}
 }
 
-func TestServeStopsOnCancellation(t *testing.T) {
+func TestServeHTTPStopsOnCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
 	started := make(chan struct{})
 	server := &http.Server{
 		Addr: "127.0.0.1:0",
@@ -73,21 +76,25 @@ func TestServeStopsOnCancellation(t *testing.T) {
 			return context.Background()
 		},
 	}
+
 	go func() {
 		<-started
 		cancel()
 	}()
-	if err := serve(ctx, server, time.Second); err != nil {
-		t.Fatalf("serve after cancellation: %v", err)
+
+	if err := serveHTTP(ctx, server, time.Second); err != nil {
+		t.Fatalf("serveHTTP after cancellation: %v", err)
 	}
 }
 
-func TestServeClosesConnectionsAfterShutdownTimeout(t *testing.T) {
+func TestServeHTTPClosesConnectionsAfterShutdownTimeout(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
 	address := make(chan string, 1)
 	started := make(chan struct{})
 	finished := make(chan struct{})
+
 	server := &http.Server{
 		Addr: "127.0.0.1:0",
 		BaseContext: func(listener net.Listener) context.Context {
@@ -100,52 +107,66 @@ func TestServeClosesConnectionsAfterShutdownTimeout(t *testing.T) {
 			close(finished)
 		}),
 	}
+
 	result := make(chan error, 1)
-	go func() { result <- serve(ctx, server, 50*time.Millisecond) }()
+	go func() {
+		result <- serveHTTP(ctx, server, 50*time.Millisecond)
+	}()
+
 	client := &http.Client{Timeout: 5 * time.Second}
 	requestDone := make(chan struct{})
 	go func() {
 		defer close(requestDone)
-		response, err := client.Get("http://" + <-address)
+		resp, err := client.Get("http://" + <-address)
 		if err == nil {
-			response.Body.Close()
+			resp.Body.Close()
 		}
 	}()
+
 	<-started
 	cancel()
+
 	if err := <-result; !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("serve error = %v, want shutdown deadline exceeded", err)
+		t.Fatalf("serveHTTP error = %v, want shutdown deadline exceeded", err)
 	}
+
 	select {
 	case <-finished:
 	case <-time.After(5 * time.Second):
 		t.Fatal("active handler was not cancelled")
 	}
+
 	<-requestDone
 }
 
 func TestWorkerAndRenderCommands(t *testing.T) {
 	dir := t.TempDir()
-	request := filepath.Join(dir, "request.json")
-	scene := filepath.Join(dir, "scene.svg")
-	final := filepath.Join(dir, "final.svg")
-	if err := os.WriteFile(request, []byte(`{"prompt":"A scene"}`), 0600); err != nil {
+	requestPath := filepath.Join(dir, "request.json")
+	scenePath := filepath.Join(dir, "scene.svg")
+	finalPath := filepath.Join(dir, "final.svg")
+
+	if err := os.WriteFile(requestPath, []byte(`{"prompt":"A scene"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
+
 	cfg := config.Defaults()
 	cfg.Database = filepath.Join(dir, "db")
-	for _, args := range [][]string{
-		{"worker", "--input", request, "--output", scene},
-		{"render", "--input", scene, "--output", final},
-	} {
-		if err := execute(context.Background(), args, cfg); err != nil {
+
+	commands := [][]string{
+		{"worker", "--input", requestPath, "--output", scenePath},
+		{"render", "--input", scenePath, "--output", finalPath},
+	}
+	for _, args := range commands {
+		if err := executeCommand(context.Background(), args, cfg); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := os.Stat(final); err != nil {
+
+	if _, err := os.Stat(finalPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := execute(context.Background(), []string{"worker"}, config.Config{}); err == nil {
+
+	if err := executeCommand(context.Background(), []string{"worker"}, config.Config{}); err == nil {
 		t.Fatal("worker accepted missing paths")
 	}
 }
@@ -153,92 +174,86 @@ func TestWorkerAndRenderCommands(t *testing.T) {
 func TestSingleExecutableCommands(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "kubereel")
-	build := exec.Command("go", "build", "-o", binary, ".")
-	if output, err := build.CombinedOutput(); err != nil {
+
+	buildCmd := exec.Command("go", "build", "-o", binary, ".")
+	if output, err := buildCmd.CombinedOutput(); err != nil {
 		t.Fatalf("build executable: %v\n%s", err, output)
 	}
-	request := filepath.Join(dir, "request.json")
-	scene := filepath.Join(dir, "scene.svg")
-	result := filepath.Join(dir, "result.svg")
-	if err := os.WriteFile(request, []byte(`{"prompt":"Single executable"}`), 0600); err != nil {
+
+	requestPath := filepath.Join(dir, "request.json")
+	scenePath := filepath.Join(dir, "scene.svg")
+	resultPath := filepath.Join(dir, "result.svg")
+
+	if err := os.WriteFile(requestPath, []byte(`{"prompt":"Single executable"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{
-		{"worker", "--input", request, "--output", scene},
-		{"render", "--input", scene, "--output", result},
-	} {
-		command := exec.Command(binary, args...)
-		command.Env = append(os.Environ(), "KUBEREEL_DATA_DIR="+dir)
-		if output, err := command.CombinedOutput(); err != nil {
+
+	commands := [][]string{
+		{"worker", "--input", requestPath, "--output", scenePath},
+		{"render", "--input", scenePath, "--output", resultPath},
+	}
+	for _, args := range commands {
+		cmd := exec.Command(binary, args...)
+		cmd.Env = append(os.Environ(), config.EnvDataDir+"="+dir)
+		if output, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%s command: %v\n%s", args[0], err, output)
 		}
 	}
-	data, err := os.ReadFile(result)
+
+	data, err := os.ReadFile(resultPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(data), "Single executable") {
 		t.Fatal("rendered artifact does not contain the request")
 	}
+
 	if err := exec.Command(binary, "unknown").Run(); err == nil {
 		t.Fatal("executable accepted an unknown command")
 	}
 }
 
 func TestEmbeddedAssets(t *testing.T) {
-	handler := routes(testDB(t))
+	handler := newBaseMux(openTestDatabase(t))
+
 	home := httptest.NewRecorder()
 	handler.ServeHTTP(home, httptest.NewRequest(http.MethodGet, "/", nil))
 	if got := home.Header().Get("Location"); got != "/workflows" {
 		t.Errorf("home redirect = %q, want /workflows", got)
 	}
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/static/app.css", nil))
-	if !strings.Contains(response.Header().Get("Content-Type"), "text/css") {
-		t.Errorf("content type = %q, want text/css", response.Header().Get("Content-Type"))
+
+	stylesheet := httptest.NewRecorder()
+	handler.ServeHTTP(stylesheet, httptest.NewRequest(http.MethodGet, "/static/app.css", nil))
+	if !strings.Contains(stylesheet.Header().Get("Content-Type"), "text/css") {
+		t.Errorf("content type = %q, want text/css", stylesheet.Header().Get("Content-Type"))
 	}
-	if !strings.Contains(response.Body.String(), "font-family") {
+	if !strings.Contains(stylesheet.Body.String(), "font-family") {
 		t.Error("stylesheet missing font-family")
 	}
 }
 
-func testConfig(t *testing.T) config.Config {
-	t.Helper()
-	dir := t.TempDir()
-	cfg := config.Defaults()
-	cfg.Address = "127.0.0.1:0"
-	cfg.Database = filepath.Join(dir, "data", "kubereel.db")
-	return cfg
-}
-
-func testDB(t *testing.T) *sql.DB {
-	t.Helper()
-	db, err := initialize(context.Background(), testConfig(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
-}
-
-func TestInitializePreservesData(t *testing.T) {
+func TestOpenDatabasePreservesData(t *testing.T) {
 	ctx := context.Background()
-	cfg := testConfig(t)
-	db, err := initialize(ctx, cfg)
+	cfg := newTestConfig(t)
+
+	db, err := openDatabase(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := db.ExecContext(ctx, `CREATE TABLE saved (id INTEGER); INSERT INTO saved VALUES (42)`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	db, err = initialize(ctx, cfg)
+
+	db, err = openDatabase(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
+
 	var id int
 	if err := db.QueryRowContext(ctx, `SELECT id FROM saved`).Scan(&id); err != nil {
 		t.Fatal(err)
@@ -248,31 +263,62 @@ func TestInitializePreservesData(t *testing.T) {
 	}
 }
 
-func TestInitializeFailure(t *testing.T) {
-	cfg := testConfig(t)
+func TestOpenDatabaseFailure(t *testing.T) {
+	cfg := newTestConfig(t)
 	if err := os.WriteFile(filepath.Dir(cfg.Database), []byte("file"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if db, err := initialize(context.Background(), cfg); err == nil {
+
+	if db, err := openDatabase(context.Background(), cfg); err == nil {
 		db.Close()
 		t.Fatal("initialization succeeded with a file as data directory")
 	}
 }
 
 func TestReadinessDatabaseFailure(t *testing.T) {
-	db := testDB(t)
-	handler := routes(db)
+	db := openTestDatabase(t)
+	handler := newBaseMux(db)
+
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for _, tt := range []struct {
+
+	tests := []struct {
 		path   string
 		status int
-	}{{"/readyz", http.StatusServiceUnavailable}, {"/healthz", http.StatusOK}} {
+	}{
+		{"/readyz", http.StatusServiceUnavailable},
+		{"/healthz", http.StatusOK},
+	}
+
+	for _, tt := range tests {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, tt.path, nil))
 		if recorder.Code != tt.status {
 			t.Errorf("%s status = %d, want %d", tt.path, recorder.Code, tt.status)
 		}
 	}
+}
+
+func newTestConfig(t *testing.T) config.Config {
+	t.Helper()
+
+	dir := t.TempDir()
+	cfg := config.Defaults()
+	cfg.Address = "127.0.0.1:0"
+	cfg.Database = filepath.Join(dir, "data", "kubereel.db")
+
+	return cfg
+}
+
+func openTestDatabase(t *testing.T) *sql.DB {
+	t.Helper()
+
+	db, err := openDatabase(context.Background(), newTestConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	return db
 }

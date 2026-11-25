@@ -23,8 +23,8 @@ class ChartTest(unittest.TestCase):
     def test_artifact_limits_are_rendered_as_decimal_integers(self):
         container = render()["Deployment"]["spec"]["template"]["spec"]["containers"][0]
         env = {item["name"]: item.get("value") for item in container["env"]}
-        self.assertEqual(env["KUBEREEL_ARTIFACT_MAX_BYTES"], "1073741824")
-        self.assertEqual(env["KUBEREEL_ARTIFACT_RETENTION_SECONDS"], "0")
+        self.assertEqual(env["ARTIFACT_MAX_BYTES"], "1073741824")
+        self.assertEqual(env["ARTIFACT_RETENTION_SECONDS"], "0")
 
     def test_video_workflow_crd_is_included(self):
         docs = render("--include-crds")
@@ -74,13 +74,14 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(len(pod["containers"]), 1)
         container = pod["containers"][0]
         env = {item["name"]: item.get("value") for item in container["env"]}
-        self.assertEqual(env["KUBEREEL_EXECUTION_MODE"], "kubernetes")
-        self.assertEqual(env["KUBEREEL_MAX_CONCURRENT"], "5")
-        self.assertEqual(env["KUBEREEL_JOB_TTL_SECONDS"], "86400")
+        self.assertEqual(env["EXECUTION_MODE"], "kubernetes")
+        self.assertEqual(env["MAX_CONCURRENT_JOBS"], "5")
+        self.assertEqual(env["JOB_TTL_SECONDS"], "86400")
         self.assertEqual(container["image"], "kubereel:0.1.0")
-        self.assertEqual(env["KUBEREEL_JOB_IMAGE"], container["image"])
-        self.assertEqual(env["KUBEREEL_SHARED_STORAGE"], "false")
-        self.assertEqual(env["KUBEREEL_PVC"], docs["PersistentVolumeClaim"]["metadata"]["name"])
+        self.assertEqual(env["JOB_IMAGE"], container["image"])
+        self.assertEqual(env["SHARED_STORAGE"], "false")
+        self.assertEqual(env["PVC_NAME"], docs["PersistentVolumeClaim"]["metadata"]["name"])
+        self.assertEqual(env["INSTANCE_NAME"], "test")
         self.assertEqual(docs["Role"]["rules"][0]["verbs"], ["get", "list", "watch", "create", "delete"])
         self.assertIn({"apiGroups": ["kubereel.io"], "resources": ["videoruns"], "verbs": ["get", "list", "watch"]}, docs["Role"]["rules"])
         self.assertIn({"apiGroups": ["kubereel.io"], "resources": ["videoruns/status"], "verbs": ["update"]}, docs["Role"]["rules"])
@@ -127,7 +128,7 @@ class ChartTest(unittest.TestCase):
         pod = docs["Deployment"]["spec"]["template"]["spec"]
         self.assertEqual(pod["volumes"][0]["persistentVolumeClaim"]["claimName"], "shared-data")
         env = {item["name"]: item.get("value") for item in pod["containers"][0]["env"]}
-        self.assertEqual(env["KUBEREEL_SHARED_STORAGE"], "true")
+        self.assertEqual(env["SHARED_STORAGE"], "true")
 
     def test_invalid_access_mode(self):
         result = subprocess.run(["helm", "template", "test", str(CHART), "--set", "storage.accessMode=ReadOnlyMany"], text=True, capture_output=True)

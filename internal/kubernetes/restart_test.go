@@ -28,7 +28,7 @@ func restartedController(previous *VideoRunController, changedConfig bool) *Vide
 func completeMockJob(t *testing.T, jobs *testJobs, controller *VideoRunController) {
 	t.Helper()
 	for _, job := range jobs.jobs {
-		if finished(job, batchv1.JobFailed) || finished(job, batchv1.JobComplete) {
+		if isJobTerminal(job) {
 			continue
 		}
 		id := job.Labels["kubereel.io/workflow"]

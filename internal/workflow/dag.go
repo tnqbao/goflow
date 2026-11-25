@@ -6,6 +6,12 @@ import (
 	"unicode/utf8"
 )
 
+const (
+	maxDAGSteps         = 100
+	maxStepNameRunes    = 63
+	maxStepDependencies = 100
+)
+
 // DAGStep describes the fields needed to validate a VideoWorkflow step graph.
 type DAGStep struct {
 	Name      string   `json:"name"`
@@ -14,51 +20,86 @@ type DAGStep struct {
 
 // ValidateDAG checks that each dependency names a distinct step and the graph is acyclic.
 func ValidateDAG(steps []DAGStep) error {
-	if len(steps) == 0 || len(steps) > 100 {
-		return fmt.Errorf("%w: workflow must have 1 to 100 steps", ErrInvalid)
+	if len(steps) == 0 || len(steps) > maxDAGSteps {
+		return fmt.Errorf("%w: workflow must have 1 to %d steps", ErrInvalid, maxDAGSteps)
 	}
 
+	stepIndices, err := indexStepNames(steps)
+	if err != nil {
+		return err
+	}
+
+	dependents, indegree, err := buildDependencyGraph(steps, stepIndices)
+	if err != nil {
+		return err
+	}
+
+	if hasDependencyCycle(len(steps), dependents, indegree) {
+		return fmt.Errorf("%w: workflow dependencies contain a cycle", ErrInvalid)
+	}
+
+	return nil
+}
+
+func indexStepNames(steps []DAGStep) (map[string]int, error) {
 	indices := make(map[string]int, len(steps))
-	for i, step := range steps {
-		if strings.TrimSpace(step.Name) == "" || utf8.RuneCountInString(step.Name) > 63 {
-			return fmt.Errorf("%w: step name must have 1 to 63 characters", ErrInvalid)
+
+	for index, step := range steps {
+		if strings.TrimSpace(step.Name) == "" || utf8.RuneCountInString(step.Name) > maxStepNameRunes {
+			return nil, fmt.Errorf("%w: step name must have 1 to %d characters", ErrInvalid, maxStepNameRunes)
 		}
+
 		if _, exists := indices[step.Name]; exists {
-			return fmt.Errorf("%w: duplicate step %q", ErrInvalid, step.Name)
+			return nil, fmt.Errorf("%w: duplicate step %q", ErrInvalid, step.Name)
 		}
-		indices[step.Name] = i
+
+		indices[step.Name] = index
 	}
 
+	return indices, nil
+}
+
+func buildDependencyGraph(steps []DAGStep, stepIndices map[string]int) ([][]int, []int, error) {
 	dependents := make([][]int, len(steps))
 	indegree := make([]int, len(steps))
-	for i, step := range steps {
-		if len(step.DependsOn) > 100 {
-			return fmt.Errorf("%w: step %q has more than 100 dependencies", ErrInvalid, step.Name)
+
+	for stepIndex, step := range steps {
+		if len(step.DependsOn) > maxStepDependencies {
+			return nil, nil, fmt.Errorf("%w: step %q has more than %d dependencies", ErrInvalid, step.Name, maxStepDependencies)
 		}
-		seen := make(map[string]struct{}, len(step.DependsOn))
-		for _, dependency := range step.DependsOn {
-			if _, exists := seen[dependency]; exists {
-				return fmt.Errorf("%w: step %q repeats dependency %q", ErrInvalid, step.Name, dependency)
+
+		seenDeps := make(map[string]struct{}, len(step.DependsOn))
+		for _, depName := range step.DependsOn {
+			if _, exists := seenDeps[depName]; exists {
+				return nil, nil, fmt.Errorf("%w: step %q repeats dependency %q", ErrInvalid, step.Name, depName)
 			}
-			seen[dependency] = struct{}{}
-			dependencyIndex, exists := indices[dependency]
+			seenDeps[depName] = struct{}{}
+
+			depIndex, exists := stepIndices[depName]
 			if !exists {
-				return fmt.Errorf("%w: step %q references unknown dependency %q", ErrInvalid, step.Name, dependency)
+				return nil, nil, fmt.Errorf("%w: step %q references unknown dependency %q", ErrInvalid, step.Name, depName)
 			}
-			if dependencyIndex == i {
-				return fmt.Errorf("%w: step %q depends on itself", ErrInvalid, step.Name)
+
+			if depIndex == stepIndex {
+				return nil, nil, fmt.Errorf("%w: step %q depends on itself", ErrInvalid, step.Name)
 			}
-			dependents[dependencyIndex] = append(dependents[dependencyIndex], i)
-			indegree[i]++
+
+			dependents[depIndex] = append(dependents[depIndex], stepIndex)
+			indegree[stepIndex]++
 		}
 	}
 
-	queue := make([]int, 0, len(steps))
-	for i, count := range indegree {
+	return dependents, indegree, nil
+}
+
+func hasDependencyCycle(stepCount int, dependents [][]int, indegree []int) bool {
+	queue := make([]int, 0, stepCount)
+	for index, count := range indegree {
 		if count == 0 {
-			queue = append(queue, i)
+			queue = append(queue, index)
 		}
 	}
+
 	for head := 0; head < len(queue); head++ {
 		for _, dependent := range dependents[queue[head]] {
 			indegree[dependent]--
@@ -67,8 +108,6 @@ func ValidateDAG(steps []DAGStep) error {
 			}
 		}
 	}
-	if len(queue) != len(steps) {
-		return fmt.Errorf("%w: workflow dependencies contain a cycle", ErrInvalid)
-	}
-	return nil
+
+	return len(queue) != stepCount
 }

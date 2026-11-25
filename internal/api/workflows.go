@@ -1,67 +1,42 @@
-// Package api exposes workflow operations over HTTP.
 package api
 
 import (
-	"encoding/json"
 	"errors"
-	"io"
-	"log/slog"
 	"net/http"
-	"path/filepath"
 	"regexp"
 
-	"github.com/tnqbao/kubereel/internal/provider"
-	"github.com/tnqbao/kubereel/internal/storage"
 	"github.com/tnqbao/kubereel/internal/workflow"
 )
 
-var idPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+const (
+	maxWorkflowRequestBytes = 16384
+	defaultProviderID       = "mock"
+)
 
-type Workflows struct {
-	Store     *workflow.Store
-	Artifacts storage.Store
-	Providers *provider.Manager
+var workflowIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+
+type createWorkflowRequest struct {
+	Prompt   string `json:"prompt"`
+	Provider string `json:"provider"`
 }
 
-func (a Workflows) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/providers", a.providers)
-	mux.HandleFunc("POST /api/workflows", a.create)
-	mux.HandleFunc("GET /api/workflows/{id}", a.get)
-	mux.HandleFunc("GET /api/workflows/{id}/artifact", a.artifact)
-}
-
-func (a Workflows) providers(w http.ResponseWriter, _ *http.Request) {
-	if a.Providers == nil {
-		http.Error(w, "provider manager unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	writeJSON(w, http.StatusOK, a.Providers.List())
-}
-
-func (a Workflows) create(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 16384)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	var request struct {
-		Prompt   string `json:"prompt"`
-		Provider string `json:"provider"`
-	}
-	if err := decoder.Decode(&request); err != nil {
+func (h Handler) createWorkflow(w http.ResponseWriter, r *http.Request) {
+	var req createWorkflowRequest
+	if err := decodeJSON(w, r, maxWorkflowRequestBytes, &req); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		http.Error(w, "invalid request", http.StatusBadRequest)
-		return
+
+	if req.Provider == "" {
+		req.Provider = defaultProviderID
 	}
-	if request.Provider == "" {
-		request.Provider = "mock"
-	}
-	if a.Providers == nil || !a.Providers.Available(request.Provider) {
+
+	if h.Providers == nil || !h.Providers.Available(req.Provider) {
 		http.Error(w, "provider unavailable", http.StatusBadRequest)
 		return
 	}
-	item, err := a.Store.Create(r.Context(), request.Prompt)
+
+	created, err := h.Workflows.Create(r.Context(), req.Prompt)
 	if errors.Is(err, workflow.ErrInvalid) {
 		http.Error(w, "invalid prompt", http.StatusBadRequest)
 		return
@@ -70,63 +45,28 @@ func (a Workflows) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unable to create workflow", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Location", "/api/workflows/"+item.ID)
-	writeJSON(w, http.StatusAccepted, item)
+
+	w.Header().Set("Location", "/api/workflows/"+created.ID)
+	writeJSON(w, http.StatusAccepted, created)
 }
 
-func (a Workflows) get(w http.ResponseWriter, r *http.Request) {
-	item, ok := a.lookup(w, r)
+func (h Handler) getWorkflow(w http.ResponseWriter, r *http.Request) {
+	wf, ok := h.findWorkflow(w, r)
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, item)
+
+	writeJSON(w, http.StatusOK, wf)
 }
 
-func (a Workflows) artifact(w http.ResponseWriter, r *http.Request) {
-	item, ok := a.lookup(w, r)
-	if !ok {
-		return
-	}
-	if item.Status != "succeeded" {
-		http.Error(w, "artifact not available", http.StatusNotFound)
-		return
-	}
-	expected := filepath.Join("workflows", item.ID, "final.svg")
-	if item.Result != expected {
-		http.Error(w, "artifact not available", http.StatusNotFound)
-		return
-	}
-	if a.Artifacts == nil {
-		http.Error(w, "artifact storage unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	object, err := a.Artifacts.Open(r.Context(), filepath.ToSlash(expected))
-	if err != nil {
-		http.Error(w, "artifact not available", http.StatusNotFound)
-		return
-	}
-	defer func() {
-		if err := object.Close(); err != nil {
-			slog.Error("close artifact", "error", err)
-		}
-	}()
-	info, err := object.Stat()
-	if err != nil {
-		http.Error(w, "artifact not available", http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "image/svg+xml")
-	w.Header().Set("Content-Disposition", `attachment; filename="mock-scene.svg"`)
-	http.ServeContent(w, r, "mock-scene.svg", info.ModTime(), object)
-}
-
-func (a Workflows) lookup(w http.ResponseWriter, r *http.Request) (workflow.Workflow, bool) {
+func (h Handler) findWorkflow(w http.ResponseWriter, r *http.Request) (workflow.Workflow, bool) {
 	id := r.PathValue("id")
-	if !idPattern.MatchString(id) {
+	if !workflowIDPattern.MatchString(id) {
 		http.Error(w, "workflow not found", http.StatusNotFound)
 		return workflow.Workflow{}, false
 	}
-	item, err := a.Store.Get(r.Context(), id)
+
+	wf, err := h.Workflows.Get(r.Context(), id)
 	if errors.Is(err, workflow.ErrNotFound) {
 		http.Error(w, "workflow not found", http.StatusNotFound)
 		return workflow.Workflow{}, false
@@ -135,18 +75,6 @@ func (a Workflows) lookup(w http.ResponseWriter, r *http.Request) (workflow.Work
 		http.Error(w, "unable to read workflow", http.StatusInternalServerError)
 		return workflow.Workflow{}, false
 	}
-	return item, true
-}
 
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	data, err := json.Marshal(value)
-	if err != nil {
-		http.Error(w, "unable to encode response", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if _, err := w.Write(data); err != nil {
-		slog.Error("write workflow response", "error", err)
-	}
+	return wf, true
 }

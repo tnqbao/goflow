@@ -14,83 +14,95 @@ import (
 	"github.com/tnqbao/kubereel/internal/storage"
 )
 
-const maxInput = 1 << 20
+const maxInputBytes = 1 << 20
 
+// Request holds the input payload for a Mock worker generation step.
 type Request struct {
 	Prompt string `json:"prompt"`
 }
 
 // Generate creates an SVG placeholder for the requested scene.
-func Generate(ctx context.Context, artifacts storage.Store, input, output string) error {
-	data, err := readFile(ctx, artifacts, input)
+func Generate(ctx context.Context, artifacts storage.Store, inputKey, outputKey string) error {
+	data, err := readBoundedArtifact(ctx, artifacts, inputKey)
 	if err != nil {
 		return err
 	}
+
 	var req Request
 	if err := json.Unmarshal(data, &req); err != nil {
 		return fmt.Errorf("decode mock request: %w", err)
 	}
+
 	svg, err := providermock.SVG(req.Prompt)
 	if err != nil {
 		return err
 	}
-	return artifacts.Put(ctx, output, bytes.NewReader(svg))
+
+	return artifacts.Put(ctx, outputKey, bytes.NewReader(svg))
 }
 
 // Render validates and copies a generated SVG as the final mock artifact.
-func Render(ctx context.Context, artifacts storage.Store, input, output string) error {
-	data, err := readFile(ctx, artifacts, input)
+func Render(ctx context.Context, artifacts storage.Store, inputKey, outputKey string) error {
+	data, err := readBoundedArtifact(ctx, artifacts, inputKey)
 	if err != nil {
 		return err
 	}
-	if err := validateSVG(data); err != nil {
+
+	if err := validateSVGData(data); err != nil {
 		return err
 	}
-	return artifacts.Put(ctx, output, bytes.NewReader(data))
+
+	return artifacts.Put(ctx, outputKey, bytes.NewReader(data))
 }
 
-// ValidateSVG checks an existing Mock artifact without modifying it.
-func ValidateSVG(ctx context.Context, artifacts storage.Store, input string) error {
-	data, err := readFile(ctx, artifacts, input)
+// ValidateSVG checks an existing Mock SVG artifact without modifying it.
+func ValidateSVG(ctx context.Context, artifacts storage.Store, inputKey string) error {
+	data, err := readBoundedArtifact(ctx, artifacts, inputKey)
 	if err != nil {
 		return err
 	}
-	return validateSVG(data)
+
+	return validateSVGData(data)
 }
 
-func validateSVG(data []byte) error {
+func validateSVGData(data []byte) error {
 	decoder := xml.NewDecoder(bytes.NewReader(data))
-	token, err := decoder.Token()
+
+	firstToken, err := decoder.Token()
 	if err != nil {
 		return fmt.Errorf("read SVG: %w", err)
 	}
-	root, ok := token.(xml.StartElement)
-	if !ok || root.Name.Local != "svg" || root.Name.Space != "http://www.w3.org/2000/svg" {
+
+	rootElement, ok := firstToken.(xml.StartElement)
+	if !ok || rootElement.Name.Local != "svg" || rootElement.Name.Space != "http://www.w3.org/2000/svg" {
 		return fmt.Errorf("invalid mock SVG")
 	}
+
 	for {
 		_, err := decoder.Token()
 		if err == io.EOF {
-			break
+			return nil
 		}
 		if err != nil {
 			return fmt.Errorf("validate SVG: %w", err)
 		}
 	}
-	return nil
 }
 
-func readFile(ctx context.Context, artifacts storage.Store, key string) ([]byte, error) {
-	file, err := artifacts.Open(ctx, key)
+func readBoundedArtifact(ctx context.Context, artifacts storage.Store, key string) ([]byte, error) {
+	object, err := artifacts.Open(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("open input: %w", err)
 	}
-	data, readErr := io.ReadAll(io.LimitReader(file, maxInput+1))
-	if err := errors.Join(readErr, file.Close()); err != nil {
+
+	data, readErr := io.ReadAll(io.LimitReader(object, maxInputBytes+1))
+	if err := errors.Join(readErr, object.Close()); err != nil {
 		return nil, fmt.Errorf("read input: %w", err)
 	}
-	if len(data) > maxInput {
-		return nil, fmt.Errorf("input exceeds %d bytes", maxInput)
+
+	if len(data) > maxInputBytes {
+		return nil, fmt.Errorf("input exceeds %d bytes", maxInputBytes)
 	}
+
 	return data, nil
 }

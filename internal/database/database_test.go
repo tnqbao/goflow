@@ -88,12 +88,13 @@ func TestMigrations(t *testing.T) {
 
 	first := []migration{{100, `CREATE TABLE example (id INTEGER PRIMARY KEY)`}}
 	for i := 0; i < 2; i++ {
-		if err := migrate(ctx, db, first); err != nil {
+		if err := runMigrations(ctx, db, first); err != nil {
 			t.Fatal(err)
 		}
 	}
+
 	bad := []migration{{101, `CREATE TABLE rolled_back (id INTEGER)`}, {102, `INVALID SQL`}}
-	if err := migrate(ctx, db, bad); err == nil || !strings.Contains(err.Error(), "migration 102") {
+	if err := runMigrations(ctx, db, bad); err == nil || !strings.Contains(err.Error(), "migration 102") {
 		t.Fatalf("expected migration 102 error, got %v", err)
 	}
 	var versions, tables int

@@ -372,7 +372,7 @@ kubectl --kubeconfig "$kubeconfig" -n kubereel-test scale deployment/kubereel-ku
 kubectl --kubeconfig "$kubeconfig" -n kubereel-test wait --for=delete pod -l kubereel.io/control-plane=kubereel --timeout=90s
 kubectl --kubeconfig "$kubeconfig" -n kubereel-test patch "$existing_job" --subresource=status --type=merge -p '{"status":{"active":0,"failed":1,"conditions":[{"type":"FailureTarget","status":"True","reason":"SimulatedFailure"},{"type":"Failed","status":"True","reason":"SimulatedFailure"}]}}'
 kubectl --kubeconfig "$kubeconfig" -n kubereel-test delete "$missing_job" --cascade=foreground --wait=true --timeout=90s
-kubectl --kubeconfig "$kubeconfig" -n kubereel-test set env deployment/kubereel-kubereel KUBEREEL_JOB_TTL_SECONDS=7200
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test set env deployment/kubereel-kubereel JOB_TTL_SECONDS=7200
 kubectl --kubeconfig "$kubeconfig" -n kubereel-test scale deployment/kubereel-kubereel --replicas=1
 kubectl --kubeconfig "$kubeconfig" -n kubereel-test rollout status deployment/kubereel-kubereel --timeout=120s
 kubectl --kubeconfig "$kubeconfig" -n kubereel-test wait --for=jsonpath='{.status.phase}'=Failed videorun/recover-existing --timeout=60s

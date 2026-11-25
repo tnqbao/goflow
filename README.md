@@ -22,7 +22,7 @@ The same `kubereel` executable provides `serve`, `worker` and `render` commands.
 ## Run locally
 
 ```sh
-KUBEREEL_DATA_DIR=./data go run . serve
+DATA_DIR=./data go run . serve
 ```
 
 The data directory defaults to `/data`, with the database stored as `kubereel.db`. Health endpoints are available at `http://localhost:8080/healthz` and `/readyz`. Standalone `serve` currently exposes health endpoints; workflow execution and its interface require Kubernetes mode.
@@ -67,7 +67,7 @@ These endpoints are experimental and do not yet implement the versioned API desc
 
 The default PVC uses `ReadWriteOnce` and Jobs are placed on the control-plane node. For multi-node execution, provide `ReadWriteMany` storage and set `storage.accessMode=ReadWriteMany`. To use an existing claim, set `storage.existingClaim` and match its access mode.
 
-Artifacts are limited to 1 GiB each by default; set `storage.maxArtifactBytes` or `KUBEREEL_ARTIFACT_MAX_BYTES` to change the limit. `storage.retentionSeconds` or `KUBEREEL_ARTIFACT_RETENTION_SECONDS` configures the retention interval; zero disables expiry. Published artifacts from successful VideoRuns with a recorded completion time are checked for expiry periodically. Failed, cancelled, older VideoRuns without completion times, and legacy workflows are retained; their automatic cleanup is not implemented. Artifact endpoints do not yet have authentication and must not be exposed publicly.
+Artifacts are limited to 1 GiB each by default; set `storage.maxArtifactBytes` or `ARTIFACT_MAX_BYTES` to change the limit. `storage.retentionSeconds` or `ARTIFACT_RETENTION_SECONDS` configures the retention interval; zero disables expiry. Published artifacts from successful VideoRuns with a recorded completion time are checked for expiry periodically. Failed, cancelled, older VideoRuns without completion times, and legacy workflows are retained; their automatic cleanup is not implemented. Artifact endpoints do not yet have authentication and must not be exposed publicly.
 
 The chart defaults to a 10 GiB PVC, five concurrent Jobs and a 24-hour finished Job retention period (`execution.jobTTLSeconds`). A short retention period can remove a finished Job before the controller observes it, leaving its run in `RequiresReview`. The chart currently supports one replica, Kubernetes execution and PVC storage only. Authentication and a complete MP4 workflow remain future tasks; the optional ingress must not be publicly exposed while authentication is unavailable.
 
