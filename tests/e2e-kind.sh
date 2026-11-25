@@ -946,7 +946,38 @@ visual_wf_delete = urllib.request.Request(
 with browser.open(visual_wf_delete, timeout=5) as response:
     if response.status != 204:
         raise RuntimeError('visual editor workflow delete failed')
-print('Embedded dashboard, visual workflow DAG API, and CSRF-protected actions verified')
+
+with browser.open(base + '/api/v1/artifacts?runId=mock-e2e-video-run', timeout=5) as response:
+    media_page = json.load(response)
+media_items = media_page.get('items', [])
+media_names = {entry['name'] for entry in media_items}
+if not {'script.json', 'scene.svg', 'clip.mp4', 'output.mp4'}.issubset(media_names):
+    raise RuntimeError(f'Media Library missing expected run outputs: {media_names}')
+
+final_video = next(entry for entry in media_items if entry['name'] == 'output.mp4')
+with browser.open(base + '/api/v1/artifacts/' + urllib.parse.quote(final_video['id'], safe=''), timeout=5) as response:
+    meta = json.load(response)
+    if meta['contentType'] != 'video/mp4' or meta['sizeBytes'] < 24:
+        raise RuntimeError(f'unexpected final video metadata: {meta}')
+
+range_preview = urllib.request.Request(
+    base + '/api/v1/artifacts/' + urllib.parse.quote(final_video['id'], safe='') + '/download',
+    headers={'Range': 'bytes=4-7'},
+)
+with browser.open(range_preview, timeout=5) as response:
+    if response.status != 206 or response.read() != b'ftyp':
+        raise RuntimeError('Media Library video Range preview failed')
+
+clip_item = next(entry for entry in media_items if entry['name'] == 'clip.mp4')
+delete_clip = urllib.request.Request(
+    base + '/api/v1/artifacts/' + urllib.parse.quote(clip_item['id'], safe=''),
+    headers={'X-CSRF-Token': user['csrfToken']},
+    method='DELETE',
+)
+with browser.open(delete_clip, timeout=5) as response:
+    if response.status != 204:
+        raise RuntimeError('Media Library artifact delete failed')
+print('Embedded dashboard, visual workflow DAG API, Media Library, and CSRF-protected actions verified')
 
 form_body = urllib.parse.urlencode({
     'prompt': 'UI mock workflow',

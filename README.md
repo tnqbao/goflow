@@ -33,7 +33,7 @@ Forward the service port locally:
 kubectl -n kubereel port-forward service/kubereel-kubereel 8080:8080
 ```
 
-- **Web Dashboard:** Open `http://localhost:8080` and complete the one-time administrator setup. Use the dashboard to design multi-step DAG workflows in the React Flow visual editor, configure providers, inspect runs, download outputs, and manage API tokens. To render a sample MP4 with the built-in Mock provider, open **Workflows → Open Mock demo**.
+- **Web Dashboard:** Open `http://localhost:8080` and complete the one-time administrator setup. Use the dashboard to design multi-step DAG workflows in the React Flow visual editor, configure providers, inspect runs, browse/preview/download/delete generated images, clips, and final videos in the **Media Library**, and manage API tokens. To render a sample MP4 with the built-in Mock provider, open **Workflows → Open Mock demo**.
 - **Health checks:** `http://localhost:8080/healthz` and `http://localhost:8080/readyz` (unauthenticated probes).
 - **API authentication & workflow test:**
 
@@ -167,7 +167,7 @@ python3 charts/kubereel/tests/test_chart.py
 - The `mock` provider and FFmpeg produce complete downloadable H.264 MP4 videos end-to-end without external API keys.
 - Official **Google Gemini** (`gemini-4-hydrogen` default via the Interactions API) is supported for `llm` steps and official **fal.ai** (via `https://queue.fal.run`) is supported for `image`, text-to-video, and image-to-video steps using `VideoProvider` resources and Kubernetes `Secret` (`secretRef`) credentials — API keys are injected directly into worker Job pods via `secretKeyRef`, endpoints enforce HTTPS + SSRF protection, `429` rate limits honor `Retry-After` with bounded backoff, and uncertain billable submissions transition to `RequiresReview` without automatic retry.
 - Built-in **Authentication** protects the Web Dashboard, management REST APIs, and artifact downloads with one-time initial administrator setup (`/setup` & `/api/v1/auth/setup`), `bcrypt` password hashing, `HttpOnly`/`SameSite=Lax` browser sessions with CSRF protection, SHA-256-hashed personal Bearer API tokens (`/api/v1/auth/tokens`), and per-IP login rate limiting.
-- The embedded **Web Dashboard** and **Visual Workflow Editor** (React, TypeScript, Tailwind CSS, and React Flow) support drag-and-drop DAG design, node configuration (`input`, `llm`, `image`, `video`, `ffmpeg`, `output`), dependency wiring, client/server DAG validation, JSON import/export, execution monitoring, provider setup, and API token management.
+- The embedded **Web Dashboard**, **Visual Workflow Editor**, and **Media Library** (React, TypeScript, Tailwind CSS, and React Flow) support drag-and-drop DAG design, node configuration (`input`, `llm`, `image`, `video`, `ffmpeg`, `output`), dependency wiring, client/server DAG validation, JSON import/export, execution monitoring, provider setup, media preview/metadata/download/deletion, and API token management.
 
 ### Provider management
 

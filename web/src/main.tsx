@@ -7,6 +7,7 @@ import {
   CircleX,
   Clapperboard,
   Film,
+  Images,
   LayoutDashboard,
   LogOut,
   Play,
@@ -15,6 +16,7 @@ import {
 } from 'lucide-react'
 import { errorMessage, request, setSessionToken, useResource } from './api'
 import { overviewCounts } from './data'
+import { MediaLibrary } from './media'
 import { Providers } from './providers'
 import { Executions, orderedRuns, RunTable } from './runs'
 import { Settings } from './settings'
@@ -44,6 +46,11 @@ const pages = {
     icon: Boxes,
     help: 'Manage provider credentials, models and limits.',
   },
+  media: {
+    label: 'Media Library',
+    icon: Images,
+    help: 'Preview, inspect, download and delete generated images, clips and final videos.',
+  },
   settings: {
     label: 'Settings',
     icon: SettingsIcon,
@@ -60,7 +67,7 @@ function readRoute() {
   let id: string | undefined
   try {
     id =
-      page === 'executions' && selected
+      (page === 'executions' || page === 'media') && selected
         ? decodeURIComponent(selected)
         : undefined
   } catch {
@@ -141,7 +148,11 @@ function App() {
         <div className="content">
           <div className="page-heading">
             <div>
-              <h1>{route.id ? 'Execution details' : page.label}</h1>
+              <h1>
+                {route.page === 'executions' && route.id
+                  ? 'Execution details'
+                  : page.label}
+              </h1>
               <p>{page.help}</p>
             </div>
             {route.page === 'overview' && session.value && (
@@ -159,6 +170,9 @@ function App() {
               {route.page === 'workflows' && <Workflows />}
               {route.page === 'executions' && <Executions id={route.id} />}
               {route.page === 'providers' && <Providers />}
+              {route.page === 'media' && (
+                <MediaLibrary key={route.id ?? ''} initialQuery={route.id ?? ''} />
+              )}
               {route.page === 'settings' && <Settings user={session.value} />}
             </>
           )}

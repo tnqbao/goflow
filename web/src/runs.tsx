@@ -293,6 +293,11 @@ function RunDetails({ id }: { id: string }) {
       <section className="panel">
         <div className="panel-head">
           <h2>Run outputs</h2>
+          {artifacts.value?.length ? (
+            <a className="text-button" href={`#/media/${idPath(item.id)}`}>
+              Open in Media Library
+            </a>
+          ) : null}
         </div>
         {artifacts.error && <Alert>{artifacts.error}</Alert>}
         {artifacts.value?.length ? (
