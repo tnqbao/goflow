@@ -114,3 +114,30 @@ func jobIsFinished(job *batchv1.Job) bool {
 	}
 	return false
 }
+
+// ProviderSummary reads the bounded termination message of a verified step worker.
+func (r *ExecutionRepository) ProviderSummary(ctx context.Context, run *unstructured.Unstructured, step, jobName string) (string, error) {
+	job, err := r.jobs.Get(ctx, jobName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !ownedByRun(job, run) || job.Annotations["kubereel.io/step"] != step {
+		return "", nil
+	}
+	pod, err := r.latestJobPod(ctx, job)
+	if errors.Is(err, ErrExecutionLogsUnavailable) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name == "worker" && status.State.Terminated != nil {
+			return status.State.Terminated.Message, nil
+		}
+	}
+	return "", nil
+}

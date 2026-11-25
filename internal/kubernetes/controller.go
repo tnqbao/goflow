@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tnqbao/kubereel/internal/mock"
+	"github.com/tnqbao/kubereel/internal/observability"
 	"github.com/tnqbao/kubereel/internal/renderer"
 	"github.com/tnqbao/kubereel/internal/repository"
 	"github.com/tnqbao/kubereel/internal/service"
@@ -38,6 +39,7 @@ type Jobs interface {
 
 // Controller reconciles durable workflow executions and runs the VideoRun controller.
 type Controller struct {
+	Metrics             *observability.Metrics
 	Schedules           *service.Schedules
 	ExecutionRepository *repository.ExecutionRepository
 	WorkflowDefinitions *repository.WorkflowDefinitionRepository
@@ -108,6 +110,9 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 		return err
 	}
 
+	if c.Metrics != nil {
+		c.Metrics.SetLegacyActive(len(activeWorkflows))
+	}
 	runningCount := activeVideoRunJobs + countRunningWorkflows(activeWorkflows)
 
 	var failures []error
@@ -147,14 +152,14 @@ func (c *Controller) reconcileWorkflow(ctx context.Context, wf workflow.Workflow
 
 	workerJob, err := c.getVerifiedJob(ctx, wf.ID, StageWorker)
 	if apierrors.IsNotFound(err) {
-		return c.failWorkflow(ctx, wf.ID, "worker job disappeared")
+		return c.failWorkflow(ctx, wf, "worker job disappeared")
 	}
 	if err != nil {
 		return err
 	}
 
 	if hasJobCondition(workerJob, batchv1.JobFailed) {
-		return c.failWorkflow(ctx, wf.ID, "worker job failed")
+		return c.failWorkflow(ctx, wf, "worker job failed")
 	}
 	if !hasJobCondition(workerJob, batchv1.JobComplete) {
 		return nil
@@ -166,16 +171,17 @@ func (c *Controller) reconcileWorkflow(ctx context.Context, wf workflow.Workflow
 	}
 
 	if hasJobCondition(renderJob, batchv1.JobFailed) {
-		return c.failWorkflow(ctx, wf.ID, "render job failed")
+		return c.failWorkflow(ctx, wf, "render job failed")
 	}
 	if !hasJobCondition(renderJob, batchv1.JobComplete) {
 		return nil
 	}
 
-	return c.completeWorkflow(ctx, wf.ID)
+	return c.completeWorkflow(ctx, wf)
 }
 
-func (c *Controller) completeWorkflow(ctx context.Context, workflowID string) error {
+func (c *Controller) completeWorkflow(ctx context.Context, wf workflow.Workflow) error {
+	workflowID := wf.ID
 	outputPath := filepath.Join("workflows", workflowID, "final.mp4")
 
 	failureReason, err := c.checkRenderedArtifact(ctx, outputPath)
@@ -183,13 +189,17 @@ func (c *Controller) completeWorkflow(ctx context.Context, workflowID string) er
 		return err
 	}
 	if failureReason != "" {
-		return c.failWorkflow(ctx, workflowID, failureReason)
+		return c.failWorkflow(ctx, wf, failureReason)
 	}
 
 	if err := c.Workflows.Transition(ctx, workflowID, "running", "succeeded", outputPath, ""); err != nil {
 		return err
 	}
 
+	if c.Metrics != nil {
+		c.Metrics.ArtifactsPublished(1)
+	}
+	c.recordLegacyOutcome(ctx, wf, "Succeeded")
 	return c.cleanupWorkflowJobs(ctx, workflowID)
 }
 
@@ -229,12 +239,21 @@ func (c *Controller) startWorkflow(ctx context.Context, wf workflow.Workflow) er
 	return c.Workflows.Transition(ctx, wf.ID, "queued", "running", "", "")
 }
 
-func (c *Controller) failWorkflow(ctx context.Context, workflowID, reason string) error {
+func (c *Controller) failWorkflow(ctx context.Context, wf workflow.Workflow, reason string) error {
+	workflowID := wf.ID
 	if err := c.Workflows.Transition(ctx, workflowID, "running", "failed", "", reason); err != nil {
 		return err
 	}
 
+	c.recordLegacyOutcome(ctx, wf, "Failed")
 	return c.cleanupWorkflowJobs(ctx, workflowID)
+}
+
+func (c *Controller) recordLegacyOutcome(ctx context.Context, wf workflow.Workflow, outcome string) {
+	slog.InfoContext(ctx, "execution state changed", "workflow_id", wf.ID, "run_id", wf.ID, "phase", outcome)
+	if c.Metrics != nil {
+		c.Metrics.RunFinished(outcome, time.Since(wf.UpdatedAt))
+	}
 }
 
 func (c *Controller) cleanupWorkflowJobs(ctx context.Context, workflowID string) error {
@@ -310,6 +329,7 @@ func (c *Controller) ensureJob(ctx context.Context, workflowID, stage string) (*
 		return nil, fmt.Errorf("create %s job: %w", stage, err)
 	}
 
+	slog.InfoContext(ctx, "execution Job submitted", "workflow_id", workflowID, "run_id", workflowID, "step_id", stage, "job_id", created.Name, "work_id", workflowID)
 	return created, nil
 }
 

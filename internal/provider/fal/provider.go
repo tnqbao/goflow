@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tnqbao/kubereel/internal/observability"
 	"github.com/tnqbao/kubereel/internal/provider"
 )
 
@@ -668,7 +669,7 @@ func (p *Provider) downloadMediaAttempt(
 		httpReq.Header.Set("Authorization", "Key "+p.apiKey)
 	}
 
-	resp, err := p.client.Do(httpReq)
+	resp, err := observability.DoProviderRequest(p.client, httpReq, "fal")
 	if err != nil {
 		return provider.MediaResult{}, 0, shouldRetryError(err), p.sanitizeTransportError(err, true)
 	}
@@ -742,7 +743,7 @@ func (p *Provider) doSingleJSONRequest(
 		httpReq.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := p.client.Do(httpReq)
+	resp, err := observability.DoProviderRequest(p.client, httpReq, "fal")
 	if err != nil {
 		retryable := idempotent && shouldRetryError(err)
 		return nil, 0, retryable, p.sanitizeTransportError(err, idempotent)

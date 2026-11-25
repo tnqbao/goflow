@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tnqbao/kubereel/internal/config"
+	"github.com/tnqbao/kubereel/internal/observability"
 	"github.com/tnqbao/kubereel/internal/repository"
 	"github.com/tnqbao/kubereel/internal/service"
 	"github.com/tnqbao/kubereel/internal/storage"
@@ -36,6 +37,7 @@ func NewControllerFromCluster(
 	cfg config.Config,
 	workflows *service.WorkflowService,
 	artifacts storage.Store,
+	metrics *observability.Metrics,
 ) (*Controller, error) {
 	if !cfg.Kubernetes.Enabled {
 		return nil, nil
@@ -69,7 +71,9 @@ func NewControllerFromCluster(
 
 	definitions := repository.NewWorkflowDefinitionRepository(clients.workflows)
 	runs := repository.NewExecutionRepository(clients.runs, clients.jobs, clients.core.Pods(cfg.Kubernetes.Namespace))
+	observer := runObserver{repository: runs, metrics: metrics}
 	return &Controller{
+		Metrics:             metrics,
 		Schedules:           service.NewSchedules(definitions, runs),
 		ExecutionRepository: runs,
 		WorkflowDefinitions: definitions,
@@ -81,6 +85,7 @@ func NewControllerFromCluster(
 		MaxConcurrent:       cfg.Kubernetes.MaxConcurrentJobs,
 		JobLock:             jobLock,
 		VideoRuns: &VideoRunController{
+			Observer: observer,
 			Runs:     clients.runs,
 			Executor: executor,
 		},

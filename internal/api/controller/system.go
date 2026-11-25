@@ -4,6 +4,7 @@ package controller
 import (
 	"database/sql"
 	"net/http"
+	"runtime/debug"
 
 	"github.com/labstack/echo/v4"
 	"github.com/tnqbao/kubereel/internal/web"
@@ -20,6 +21,7 @@ func (ctrl SystemController) Register(e *echo.Echo) {
 	e.GET("/static/*", echo.WrapHandler(web.Assets()))
 	e.GET("/healthz", ctrl.Health)
 	e.HEAD("/healthz", ctrl.Health)
+	e.GET("/version", ctrl.Version)
 	e.GET("/readyz", ctrl.Readiness)
 	e.HEAD("/readyz", ctrl.Readiness)
 }
@@ -45,4 +47,26 @@ func (ctrl SystemController) Readiness(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusOK)
+}
+
+// BuildVersion and BuildRevision can be set at link time for packaged binaries.
+var BuildVersion = "dev"
+var BuildRevision = ""
+
+func (ctrl SystemController) Version(c echo.Context) error {
+	version, revision := BuildVersion, BuildRevision
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if version == "dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
+			version = info.Main.Version
+		}
+		for _, setting := range info.Settings {
+			if revision == "" && setting.Key == "vcs.revision" {
+				revision = setting.Value
+			}
+		}
+	}
+	return c.JSON(http.StatusOK, struct {
+		Version  string `json:"version"`
+		Revision string `json:"revision,omitempty"`
+	}{version, revision})
 }

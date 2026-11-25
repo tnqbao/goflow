@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tnqbao/kubereel/internal/observability"
 	"github.com/tnqbao/kubereel/internal/provider"
 )
 
@@ -240,7 +241,7 @@ func (p *Provider) Generate(ctx context.Context, req provider.TextRequest) (prov
 	httpReq.Header.Set("Accept", "application/json")
 	httpReq.Header.Set("x-goog-api-key", p.apiKey)
 
-	resp, err := p.client.Do(httpReq)
+	resp, err := observability.DoProviderRequest(p.client, httpReq, "gemini")
 	if err != nil {
 		return provider.TextResult{}, p.classifyTransportError(err)
 	}

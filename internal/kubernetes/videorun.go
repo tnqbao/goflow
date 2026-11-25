@@ -41,6 +41,7 @@ func VideoProviderResource() schema.GroupVersionResource {
 
 // VideoRunController validates workflow snapshots and reconciles VideoRun executions.
 type VideoRunController struct {
+	Observer runObserver
 	Runs     dynamic.ResourceInterface
 	Executor *StepExecutor
 }
@@ -79,6 +80,8 @@ func (c *VideoRunController) Run(ctx context.Context) {
 	if jobInformer != nil && !cache.WaitForCacheSync(ctx.Done(), jobInformer.HasSynced) {
 		return
 	}
+
+	c.Observer.installInventory(runInformer, jobInformer)
 
 	go func() {
 		<-ctx.Done()
@@ -189,6 +192,7 @@ func (c *VideoRunController) processNextWorkItem(
 
 // Reconcile updates a single VideoRun using its current resource version.
 func (c *VideoRunController) Reconcile(ctx context.Context, name string) error {
+	ctx = context.WithValue(ctx, runObserverKey{}, c.Observer)
 	run, err := c.Runs.Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil
@@ -257,6 +261,8 @@ func updateVideoRunStatus(
 	run *unstructured.Unstructured,
 	status map[string]interface{},
 ) error {
+	previous, _, _ := unstructured.NestedMap(run.Object, "status")
+	stampRunStatus(previous, status, time.Now())
 	updated := run.DeepCopy()
 	if err := unstructured.SetNestedMap(updated.Object, status, "status"); err != nil {
 		return err
@@ -266,6 +272,8 @@ func updateVideoRunStatus(
 		return fmt.Errorf("update VideoRun status: %w", err)
 	}
 
+	observer, _ := ctx.Value(runObserverKey{}).(runObserver)
+	observer.record(ctx, run, previous, status)
 	return nil
 }
 

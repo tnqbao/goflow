@@ -22,6 +22,7 @@ import (
 	"github.com/tnqbao/kubereel/internal/database"
 	"github.com/tnqbao/kubereel/internal/executor"
 	"github.com/tnqbao/kubereel/internal/kubernetes"
+	"github.com/tnqbao/kubereel/internal/observability"
 	"github.com/tnqbao/kubereel/internal/provider"
 	"github.com/tnqbao/kubereel/internal/renderer"
 	"github.com/tnqbao/kubereel/internal/repository"
@@ -36,6 +37,7 @@ const (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -108,7 +110,23 @@ func runTask(ctx context.Context, command, inputPath, outputPath string, cfg con
 		return fmt.Errorf("output artifact: %w", err)
 	}
 
+	logger := slog.With("work_id", filepath.Base(filepath.Dir(outputKey)), "stage", command)
+	start := time.Now()
+	logger.InfoContext(ctx, "task started")
+	defer func() {
+		outcome := "succeeded"
+		if runErr != nil {
+			outcome = "failed"
+		}
+		logger.InfoContext(ctx, "task finished", "outcome", outcome, "duration_seconds", time.Since(start).Seconds())
+	}()
 	if command == kubernetes.StageWorker {
+		ctx, recorder := observability.WithProviderRecorder(ctx)
+		defer func() {
+			if err := recorder.WriteTerminationSummary(); err != nil {
+				logger.WarnContext(ctx, "provider metrics could not be published")
+			}
+		}()
 		return executor.Execute(ctx, artifacts, inputKey, outputKey)
 	}
 
@@ -141,12 +159,14 @@ func runServer(ctx context.Context, cfg config.Config) (runErr error) {
 	workflowRepo := repository.NewWorkflowRepository(db)
 	workflowSvc := service.NewWorkflowService(workflowRepo, artifacts, providerSvc)
 
-	operator, err := kubernetes.NewControllerFromCluster(ctx, cfg, workflowSvc, artifacts)
+	metrics := observability.NewMetrics()
+	operator, err := kubernetes.NewControllerFromCluster(ctx, cfg, workflowSvc, artifacts, metrics)
 	if err != nil {
 		return err
 	}
 
 	router := newBaseEcho(db)
+	router.GET("/metrics", echo.WrapHandler(metrics.Handler()), middleware.RequireAPIAuth(authSvc))
 	(web.AuthController{Service: authSvc}).Register(router)
 	if operator != nil {
 		registerClusterControllers(router, authSvc, workflowSvc, providerSvc, service.NewProviderManagement(operator.ProviderRepository), service.NewWorkflowDefinitions(operator.WorkflowDefinitions),

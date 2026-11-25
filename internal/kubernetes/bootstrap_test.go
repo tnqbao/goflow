@@ -11,7 +11,7 @@ import (
 func TestNewControllerFromClusterDisabledAndValidation(t *testing.T) {
 	cfg := config.Defaults()
 
-	controller, err := NewControllerFromCluster(context.Background(), cfg, nil, nil)
+	controller, err := NewControllerFromCluster(context.Background(), cfg, nil, nil, nil)
 	if err != nil || controller != nil {
 		t.Fatalf("disabled controller = %v, %v", controller, err)
 	}
@@ -21,7 +21,7 @@ func TestNewControllerFromClusterDisabledAndValidation(t *testing.T) {
 		Namespace:         "kubereel",
 		MaxConcurrentJobs: 4,
 	}
-	if _, err := NewControllerFromCluster(context.Background(), cfg, nil, nil); err == nil {
+	if _, err := NewControllerFromCluster(context.Background(), cfg, nil, nil, nil); err == nil {
 		t.Fatal("accepted incomplete Kubernetes job configuration")
 	}
 }

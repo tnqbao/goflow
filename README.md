@@ -194,3 +194,7 @@ Deletion requires a settled run and no active Jobs. It removes the file while pr
 Use the authenticated [Schedule API](docs/schedule-api.yaml) at `/api/v1/workflows/{id}/schedule` to set one recurring schedule per Kubernetes workflow. Supply a five-field UTC cron expression and the typed inputs needed by the workflow. Include `allowPaid: true` to approve recurring use of external providers. PUT replaces the schedule, and `paused: true` pauses future submissions. To resume, PUT the schedule with `paused: false`.
 
 Each launch snapshots the current workflow definition. After downtime, the scheduler evaluates only the newest occurrence within the last 15 minutes. It skips occurrences while the previous scheduled run has active work or needs review. Pause and deletion leave submitted runs in place, and a submission already in progress can complete. Use the Execution API to cancel a submitted run.
+
+### Observability
+
+Use the authenticated Prometheus endpoint at `/metrics` to monitor execution state, Jobs, step retries, artifact publication and provider HTTP requests. The control plane and workers emit structured JSON logs. See the [observability guide](docs/observability.md) for the metric names, scrape configuration and log correlation fields.

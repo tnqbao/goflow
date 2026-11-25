@@ -34,8 +34,9 @@ jobs:
       - name: Build Docker image
         env:
           COMMIT_SHA: ${{ github.sha }}
+          BUILD_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
         run: |
-          docker build -t "kubereel:${COMMIT_SHA}" .
+          docker build --build-arg "KUBEREEL_VERSION=${BUILD_VERSION}" --build-arg "KUBEREEL_REVISION=${COMMIT_SHA}" -t "kubereel:${COMMIT_SHA}" .
           docker save "kubereel:${COMMIT_SHA}" -o "${RUNNER_TEMP}/kubereel-image.tar"
 
       - name: Upload Docker image artifact

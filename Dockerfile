@@ -4,7 +4,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY main.go ./
 COPY internal/ ./internal/
-RUN CGO_ENABLED=0 go build -trimpath -o /out/kubereel .
+ARG KUBEREEL_VERSION=dev
+ARG KUBEREEL_REVISION=
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-X github.com/tnqbao/kubereel/internal/api/controller.BuildVersion=${KUBEREEL_VERSION} -X github.com/tnqbao/kubereel/internal/api/controller.BuildRevision=${KUBEREEL_REVISION}" -o /out/kubereel .
 
 FROM debian:bookworm-slim@sha256:e67eeead736ff7bbe258ef088bff683635c561b1fcfefad0806c1df4ab49ce0e
 RUN apt-get update \

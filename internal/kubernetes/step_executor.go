@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path"
 	"slices"
 	"strings"
@@ -814,6 +815,8 @@ func (e *StepExecutor) submitStep(
 	if _, err := e.Jobs.Create(ctx, job, metav1.CreateOptions{}); err != nil {
 		return fmt.Errorf("submit step Job: %w", err)
 	}
+	workflowRef, _, _ := unstructured.NestedString(run.Object, "spec", "workflowRef")
+	slog.InfoContext(ctx, "execution Job submitted", "workflow_id", workflowRef, "run_id", run.GetName(), "step_id", step.Name, "job_id", job.Name, "work_id", workflowID)
 
 	return nil
 }

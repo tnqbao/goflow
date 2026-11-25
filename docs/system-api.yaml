@@ -1,0 +1,46 @@
+openapi: 3.0.3
+info:
+  title: KubeReel System API
+  version: "1"
+paths:
+  /healthz:
+    get:
+      summary: Check process liveness
+      responses:
+        "200": {description: Process is alive}
+  /readyz:
+    get:
+      summary: Check database readiness
+      responses:
+        "200": {description: Ready}
+        "503": {description: Not ready}
+  /version:
+    get:
+      summary: Get build version and revision
+      responses:
+        "200":
+          description: Build information
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version]
+                properties:
+                  version: {type: string}
+                  revision: {type: string}
+  /metrics:
+    get:
+      summary: Scrape Prometheus metrics
+      security: [{bearer: []}, {session: []}]
+      responses:
+        "200":
+          description: Prometheus exposition
+          content:
+            text/plain:
+              schema: {type: string}
+        "401": {description: Authentication required}
+        "503": {description: Service unavailable}
+components:
+  securitySchemes:
+    bearer: {type: http, scheme: bearer}
+    session: {type: apiKey, in: cookie, name: kubereel_session}

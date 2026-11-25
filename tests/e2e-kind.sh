@@ -723,6 +723,26 @@ assert scheduled['lastRunId'].startswith('scheduled-')
 workflow_request('DELETE', schedule_path, expected=204)
 workflow_request('GET', schedule_path, expected=404)
 assert wait_run(scheduled_path, 'Succeeded')['workflowId'] == 'scheduled-definition'
+
+with urllib.request.urlopen(base + '/version', timeout=10) as response:
+    assert json.load(response)['version']
+try:
+    urllib.request.urlopen(base + '/metrics', timeout=10)
+except urllib.error.HTTPError as error:
+    assert error.code == 401
+else:
+    raise RuntimeError('metrics endpoint accepted an unauthenticated request')
+request = urllib.request.Request(base + '/metrics', headers=auth_headers)
+with urllib.request.urlopen(request, timeout=10) as response:
+    metrics = response.read().decode()
+assert re.search(r'^kubereel_executions_completed_total [1-9]', metrics, re.M)
+assert re.search(r'^kubereel_artifacts_generated_total [1-9]', metrics, re.M)
+assert 'kubereel_execution_duration_seconds_count{outcome="Succeeded"}' in metrics
+assert 'kubereel_step_duration_seconds_count{outcome="Succeeded"}' in metrics
+assert 'kubereel_active_jobs ' in metrics
+assert 'kubereel_provider_errors_total{provider="fal"}' in metrics
+assert scheduled['lastRunId'] not in metrics
+
 workflow_request('DELETE', '/scheduled-definition', expected=204)
 
 
