@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tnqbao/kubereel/internal/config"
+	"github.com/tnqbao/kubereel/internal/executor"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -26,7 +27,18 @@ const (
 	dataMountPath              = "/data"
 )
 
-var workflowIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+var (
+	workflowIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+	dnsLabelPattern   = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	secretNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
+	secretKeyPattern  = regexp.MustCompile(`^[-._a-zA-Z0-9]+$`)
+)
+
+// SecretKeyRef identifies a key inside a namespace-local Kubernetes Secret without exposing its value.
+type SecretKeyRef struct {
+	Name string
+	Key  string
+}
 
 // JobConfig defines how temporary worker and render Jobs are constructed.
 type JobConfig struct {
@@ -37,6 +49,9 @@ type JobConfig struct {
 	PullPolicy              corev1.PullPolicy
 	TTLSecondsAfterFinished *int32
 	Artifacts               *ArtifactConfig
+	ProviderName            string
+	ProviderSecret          *SecretKeyRef
+	ProviderTimeoutSeconds  int64
 }
 
 // ArtifactConfig propagates storage bounds to worker and render Jobs.
@@ -77,6 +92,15 @@ func jobWithPaths(workflowID, stage, inputPath, outputPath string, cfg JobConfig
 		},
 	}
 
+	if normalizedCfg.ProviderName != "" {
+		job.Labels["kubereel.io/provider"] = normalizedCfg.ProviderName
+	}
+
+	if normalizedCfg.ProviderTimeoutSeconds > 0 {
+		timeout := normalizedCfg.ProviderTimeoutSeconds
+		job.Spec.ActiveDeadlineSeconds = &timeout
+	}
+
 	return job, nil
 }
 
@@ -103,6 +127,10 @@ func validateAndNormalizeJobConfig(workflowID, stage string, cfg JobConfig) (Job
 
 	if !isValidArtifactConfig(cfg.Artifacts) {
 		return JobConfig{}, 0, fmt.Errorf("invalid artifact configuration")
+	}
+
+	if !isValidProviderBinding(cfg) {
+		return JobConfig{}, 0, fmt.Errorf("invalid provider job configuration")
 	}
 
 	ttlSeconds := defaultJobTTLSeconds
@@ -134,6 +162,28 @@ func isValidArtifactConfig(cfg *ArtifactConfig) bool {
 		cfg.MaxBytes <= config.MaxArtifactBytesLimit &&
 		cfg.RetentionSeconds >= 0 &&
 		cfg.RetentionSeconds <= maxValidRetention
+}
+
+func isValidProviderBinding(cfg JobConfig) bool {
+	if cfg.ProviderName != "" && (len(cfg.ProviderName) > 63 || !dnsLabelPattern.MatchString(cfg.ProviderName)) {
+		return false
+	}
+
+	if cfg.ProviderTimeoutSeconds < 0 || cfg.ProviderTimeoutSeconds > 86400 {
+		return false
+	}
+
+	if cfg.ProviderSecret == nil {
+		return true
+	}
+
+	name := cfg.ProviderSecret.Name
+	key := cfg.ProviderSecret.Key
+	if len(name) == 0 || len(name) > 253 || !secretNamePattern.MatchString(name) {
+		return false
+	}
+
+	return len(key) > 0 && len(key) <= 253 && secretKeyPattern.MatchString(key)
 }
 
 func stageArtifactPaths(workflowID, stage string) (string, string) {
@@ -199,16 +249,28 @@ func buildJobContainer(stage, inputPath, outputPath string, cfg JobConfig) corev
 	}
 
 	if cfg.Artifacts != nil {
-		container.Env = []corev1.EnvVar{
-			{
+		container.Env = append(container.Env,
+			corev1.EnvVar{
 				Name:  config.EnvArtifactMaxBytes,
 				Value: strconv.FormatInt(cfg.Artifacts.MaxBytes, 10),
 			},
-			{
+			corev1.EnvVar{
 				Name:  config.EnvArtifactRetentionSeconds,
 				Value: strconv.FormatInt(cfg.Artifacts.RetentionSeconds, 10),
 			},
-		}
+		)
+	}
+
+	if cfg.ProviderSecret != nil {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name: executor.EnvProviderAPIKey,
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: cfg.ProviderSecret.Name},
+					Key:                  cfg.ProviderSecret.Key,
+				},
+			},
+		})
 	}
 
 	return container

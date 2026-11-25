@@ -33,6 +33,15 @@ func VideoRunResource() schema.GroupVersionResource {
 	}
 }
 
+// VideoProviderResource identifies the VideoProvider Custom Resource in the kubereel.io group.
+func VideoProviderResource() schema.GroupVersionResource {
+	return schema.GroupVersionResource{
+		Group:    "kubereel.io",
+		Version:  "v1alpha1",
+		Resource: "videoproviders",
+	}
+}
+
 // VideoRunController validates workflow snapshots and reconciles VideoRun executions.
 type VideoRunController struct {
 	Runs     dynamic.ResourceInterface

@@ -12,12 +12,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tnqbao/kubereel/internal/executor"
 	"github.com/tnqbao/kubereel/internal/mock"
 	"github.com/tnqbao/kubereel/internal/renderer"
 	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic/fake"
 )
 
 func mockRun(names ...string) *unstructured.Unstructured {
@@ -635,5 +638,101 @@ func TestStepExecutorEndToEndMockWorkflowDAG(t *testing.T) {
 	}
 	if err := controller.Executor.cleanupArtifacts(ctx, got, time.Now().Add(time.Minute)); err != nil {
 		t.Fatalf("cleanupArtifacts = %v", err)
+	}
+}
+
+func TestStepExecutorGeminiProviderSecretLimitAndUncertainOutcome(t *testing.T) {
+	ctx := context.Background()
+	steps := []interface{}{
+		map[string]interface{}{
+			"name":        "first-idea",
+			"type":        "llm",
+			"providerRef": "gemini-main",
+		},
+		map[string]interface{}{
+			"name":        "second-idea",
+			"type":        "llm",
+			"providerRef": "gemini-main",
+			"retry":       map[string]interface{}{"maxAttempts": int64(3)},
+		},
+	}
+	run := testVideoRun(steps)
+	run.SetUID(types.UID("11112222-3333-4444-5555-666677778888"))
+	run.Object["spec"].(map[string]interface{})["inputs"] = map[string]interface{}{
+		"prompt": map[string]interface{}{"stringValue": "Write a sci-fi teaser script"},
+	}
+
+	vp := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "kubereel.io/v1alpha1",
+		"kind":       "VideoProvider",
+		"metadata":   map[string]interface{}{"name": "gemini-main", "namespace": "test"},
+		"spec": map[string]interface{}{
+			"type":           "gemini",
+			"capabilities":   []interface{}{"text"},
+			"models":         []interface{}{"gemini-4-hydrogen"},
+			"secretRef":      map[string]interface{}{"name": "gemini-creds", "key": "api-key"},
+			"maxConcurrent":  int64(1),
+			"timeoutSeconds": int64(45),
+		},
+	}}
+
+	dynClient := fake.NewSimpleDynamicClient(runtime.NewScheme(), run, vp)
+	controller, jobs := testStepController(t, run, 4)
+	controller.Runs = dynClient.Resource(VideoRunResource()).Namespace("test")
+	controller.Executor.Runs = controller.Runs
+	controller.Executor.Providers = dynClient.Resource(VideoProviderResource()).Namespace("test")
+
+	reconcileTimes(t, controller, 4)
+	if len(jobs.jobs) != 1 {
+		t.Fatalf("Jobs = %d, want 1 due to VideoProvider maxConcurrent=1", len(jobs.jobs))
+	}
+
+	var firstJob *batchv1.Job
+	for _, firstJob = range jobs.jobs {
+	}
+	if firstJob.Labels["kubereel.io/provider"] != "gemini-main" || *firstJob.Spec.ActiveDeadlineSeconds != 45 {
+		t.Fatalf("unexpected Gemini Job spec: %+v", firstJob)
+	}
+
+	env := firstJob.Spec.Template.Spec.Containers[0].Env
+	if len(env) != 1 || env[0].Name != executor.EnvProviderAPIKey || env[0].ValueFrom == nil ||
+		env[0].ValueFrom.SecretKeyRef.Name != "gemini-creds" || env[0].ValueFrom.SecretKeyRef.Key != "api-key" {
+		t.Fatalf("expected SecretKeyRef env injection, got %+v", env)
+	}
+
+	firstID := firstJob.Labels["kubereel.io/workflow"]
+	firstDir := filepath.ToSlash(filepath.Join("workflows", firstID))
+	scriptPayload := `{"prompt":"Write a sci-fi teaser script","script":"Scene 1: Orbit","scenes":["Scene 1: Orbit"]}`
+	if err := controller.Executor.Artifacts.Put(ctx, firstDir+"/script.json", bytes.NewReader([]byte(scriptPayload))); err != nil {
+		t.Fatal(err)
+	}
+	jobs.finish(firstID, StageWorker, batchv1.JobComplete)
+
+	reconcileTimes(t, controller, 3)
+	if len(jobs.jobs) != 2 {
+		t.Fatalf("Jobs = %d, want 2 after first Gemini step completed", len(jobs.jobs))
+	}
+
+	var secondJob *batchv1.Job
+	for _, candidate := range jobs.jobs {
+		if candidate.Name != firstJob.Name {
+			secondJob = candidate
+		}
+	}
+	secondID := secondJob.Labels["kubereel.io/workflow"]
+	secondDir := filepath.ToSlash(filepath.Join("workflows", secondID))
+	if err := controller.Executor.Artifacts.Put(ctx, secondDir+"/"+executor.UncertainOutcomeFile, bytes.NewReader([]byte(`{"reason":"uncertain"}`))); err != nil {
+		t.Fatal(err)
+	}
+	jobs.finish(secondID, StageWorker, batchv1.JobFailed)
+
+	reconcileTimes(t, controller, 1)
+	got, err := controller.Runs.Get(ctx, "sample", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	phase, _, _ := unstructured.NestedString(got.Object, "status", "phase")
+	if phase != "RequiresReview" || len(jobs.jobs) != 2 {
+		t.Fatalf("expected RequiresReview without retry on uncertain submission, got status=%v jobs=%d", got.Object["status"], len(jobs.jobs))
 	}
 }

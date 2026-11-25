@@ -188,7 +188,7 @@ func (e *StepExecutor) verifyStepForCancellation(
 	step executableStep,
 	entry map[string]interface{},
 ) (*batchv1.Job, string, error) {
-	if !isSupportedExecutableStep(step) {
+	if !e.isSupportedStep(step) {
 		return nil, "cannot verify the running step", nil
 	}
 

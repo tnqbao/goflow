@@ -19,7 +19,7 @@ rules:
     resources: ["persistentvolumeclaims"]
     verbs: ["get"]
   - apiGroups: ["kubereel.io"]
-    resources: ["videoruns"]
+    resources: ["videoruns", "videoproviders"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["kubereel.io"]
     resources: ["videoruns/status"]

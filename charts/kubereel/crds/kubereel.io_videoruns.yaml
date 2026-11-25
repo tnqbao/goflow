@@ -321,6 +321,8 @@ spec:
                       x-kubernetes-validations:
                       - rule: has(self.artifactMaxBytes) == has(self.artifactRetentionSeconds)
                         message: artifact configuration fields must be provided together
+                      - rule: has(self.secretName) == has(self.secretKey)
+                        message: secretName and secretKey must be provided together
                       properties:
                         image: {type: string, minLength: 1, maxLength: 2048}
                         claim: {type: string, minLength: 1, maxLength: 253}
@@ -330,6 +332,10 @@ spec:
                         ttlSeconds: {type: integer, minimum: 0, maximum: 2147483647}
                         artifactMaxBytes: {type: integer, minimum: 1, maximum: 9007199254740991}
                         artifactRetentionSeconds: {type: integer, minimum: 0, maximum: 9223372036}
+                        providerName: {type: string, minLength: 1, maxLength: 63}
+                        secretName: {type: string, minLength: 1, maxLength: 253}
+                        secretKey: {type: string, minLength: 1, maxLength: 253}
+                        providerTimeoutSeconds: {type: integer, minimum: 1, maximum: 86400}
                     providerRequestID:
                       type: string
                       maxLength: 1024

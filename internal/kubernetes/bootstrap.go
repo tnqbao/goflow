@@ -21,9 +21,10 @@ import (
 const clusterProbeTimeout = 10 * time.Second
 
 type clusterClients struct {
-	jobs Jobs
-	core coreclient.CoreV1Interface
-	runs dynamic.ResourceInterface
+	jobs      Jobs
+	core      coreclient.CoreV1Interface
+	runs      dynamic.ResourceInterface
+	providers dynamic.ResourceInterface
 }
 
 // NewControllerFromCluster connects to the in-cluster Kubernetes API, verifies RBAC
@@ -55,6 +56,7 @@ func NewControllerFromCluster(
 	jobLock := &sync.Mutex{}
 	executor := &StepExecutor{
 		Runs:          clients.runs,
+		Providers:     clients.providers,
 		Jobs:          clients.jobs,
 		Workflows:     workflows,
 		Config:        jobCfg,
@@ -122,9 +124,10 @@ func newClusterClients(namespace string) (clusterClients, error) {
 	}
 
 	return clusterClients{
-		jobs: batchClient.Jobs(namespace),
-		core: coreClient,
-		runs: dynamicClient.Resource(VideoRunResource()).Namespace(namespace),
+		jobs:      batchClient.Jobs(namespace),
+		core:      coreClient,
+		runs:      dynamicClient.Resource(VideoRunResource()).Namespace(namespace),
+		providers: dynamicClient.Resource(VideoProviderResource()).Namespace(namespace),
 	}, nil
 }
 
@@ -138,6 +141,10 @@ func verifyClusterAccess(ctx context.Context, clients clusterClients, namespace 
 
 	if _, err := clients.runs.List(probeCtx, metav1.ListOptions{Limit: 1}); err != nil {
 		return fmt.Errorf("verify VideoRun access: %w", err)
+	}
+
+	if _, err := clients.providers.List(probeCtx, metav1.ListOptions{Limit: 1}); err != nil {
+		return fmt.Errorf("verify VideoProvider access: %w", err)
 	}
 
 	claim, err := clients.core.PersistentVolumeClaims(namespace).Get(probeCtx, jobCfg.Claim, metav1.GetOptions{})

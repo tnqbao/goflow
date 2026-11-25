@@ -117,8 +117,7 @@ spec:
   workflowSnapshot:
     steps:
       - name: script
-        type: llm
-        providerRef: sample-provider
+        type: input
   inputs:
     topic: {stringValue: forest}
     clips: {integerValue: 2}

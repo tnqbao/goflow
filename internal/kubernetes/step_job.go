@@ -31,6 +31,10 @@ type savedJobConfig struct {
 	TTLSeconds               *int32            `json:"ttlSeconds"`
 	ArtifactMaxBytes         *int64            `json:"artifactMaxBytes"`
 	ArtifactRetentionSeconds *int64            `json:"artifactRetentionSeconds"`
+	ProviderName             string            `json:"providerName"`
+	SecretName               *string           `json:"secretName"`
+	SecretKey                *string           `json:"secretKey"`
+	ProviderTimeoutSeconds   *int64            `json:"providerTimeoutSeconds"`
 }
 
 func countActiveVideoRunJobs(ctx context.Context, jobs Jobs, instance string) (int, error) {
@@ -39,6 +43,25 @@ func countActiveVideoRunJobs(ctx context.Context, jobs Jobs, instance string) (i
 	list, err := jobs.List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
 		return 0, fmt.Errorf("list VideoRun jobs: %w", err)
+	}
+
+	activeCount := 0
+	for i := range list.Items {
+		if isJobTerminal(&list.Items[i]) {
+			continue
+		}
+		activeCount++
+	}
+
+	return activeCount, nil
+}
+
+func countActiveProviderJobs(ctx context.Context, jobs Jobs, instance, providerName string) (int, error) {
+	selector := "kubereel.io/instance=" + instance + ",kubereel.io/provider=" + providerName
+
+	list, err := jobs.List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return 0, fmt.Errorf("list provider jobs: %w", err)
 	}
 
 	activeCount := 0
@@ -65,6 +88,16 @@ func jobConfigStatus(cfg JobConfig, job *batchv1.Job) map[string]interface{} {
 	if cfg.Artifacts != nil {
 		status["artifactMaxBytes"] = cfg.Artifacts.MaxBytes
 		status["artifactRetentionSeconds"] = cfg.Artifacts.RetentionSeconds
+	}
+	if cfg.ProviderName != "" {
+		status["providerName"] = cfg.ProviderName
+	}
+	if cfg.ProviderSecret != nil {
+		status["secretName"] = cfg.ProviderSecret.Name
+		status["secretKey"] = cfg.ProviderSecret.Key
+	}
+	if cfg.ProviderTimeoutSeconds > 0 {
+		status["providerTimeoutSeconds"] = cfg.ProviderTimeoutSeconds
 	}
 
 	return status
@@ -114,6 +147,10 @@ func buildJobConfigFromSaved(saved savedJobConfig) (JobConfig, error) {
 		return JobConfig{}, fmt.Errorf("recorded artifact configuration is incomplete")
 	}
 
+	if (saved.SecretName == nil) != (saved.SecretKey == nil) {
+		return JobConfig{}, fmt.Errorf("recorded secret configuration is incomplete")
+	}
+
 	cfg := JobConfig{
 		Image:                   saved.Image,
 		Claim:                   saved.Claim,
@@ -121,6 +158,7 @@ func buildJobConfigFromSaved(saved savedJobConfig) (JobConfig, error) {
 		SharedStorage:           *saved.SharedStorage,
 		PullPolicy:              saved.PullPolicy,
 		TTLSecondsAfterFinished: saved.TTLSeconds,
+		ProviderName:            saved.ProviderName,
 	}
 
 	if saved.ArtifactMaxBytes != nil {
@@ -130,8 +168,19 @@ func buildJobConfigFromSaved(saved savedJobConfig) (JobConfig, error) {
 		}
 	}
 
-	if !isValidArtifactConfig(cfg.Artifacts) {
-		return JobConfig{}, fmt.Errorf("recorded artifact configuration is invalid")
+	if saved.SecretName != nil {
+		cfg.ProviderSecret = &SecretKeyRef{
+			Name: *saved.SecretName,
+			Key:  *saved.SecretKey,
+		}
+	}
+
+	if saved.ProviderTimeoutSeconds != nil {
+		cfg.ProviderTimeoutSeconds = *saved.ProviderTimeoutSeconds
+	}
+
+	if !isValidArtifactConfig(cfg.Artifacts) || !isValidProviderBinding(cfg) {
+		return JobConfig{}, fmt.Errorf("recorded job configuration is invalid")
 	}
 
 	return cfg, nil

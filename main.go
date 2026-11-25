@@ -19,8 +19,8 @@ import (
 	"github.com/tnqbao/kubereel/internal/api/controller"
 	"github.com/tnqbao/kubereel/internal/config"
 	"github.com/tnqbao/kubereel/internal/database"
+	"github.com/tnqbao/kubereel/internal/executor"
 	"github.com/tnqbao/kubereel/internal/kubernetes"
-	"github.com/tnqbao/kubereel/internal/mock"
 	"github.com/tnqbao/kubereel/internal/provider"
 	"github.com/tnqbao/kubereel/internal/renderer"
 	"github.com/tnqbao/kubereel/internal/repository"
@@ -108,7 +108,7 @@ func runTask(ctx context.Context, command, inputPath, outputPath string, cfg con
 	}
 
 	if command == kubernetes.StageWorker {
-		return mock.Execute(ctx, artifacts, inputKey, outputKey)
+		return executor.Execute(ctx, artifacts, inputKey, outputKey)
 	}
 
 	return renderer.New().RenderFile(ctx, artifacts, inputKey, outputKey)
