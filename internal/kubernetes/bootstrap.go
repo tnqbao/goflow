@@ -22,6 +22,7 @@ import (
 const clusterProbeTimeout = 10 * time.Second
 
 type clusterClients struct {
+	workflows dynamic.ResourceInterface
 	jobs      Jobs
 	core      coreclient.CoreV1Interface
 	runs      dynamic.ResourceInterface
@@ -67,13 +68,14 @@ func NewControllerFromCluster(
 	}
 
 	return &Controller{
-		ProviderRepository: repository.NewProviderRepository(clients.providers, clients.core.Secrets(cfg.Kubernetes.Namespace)),
-		Workflows:          workflows,
-		Jobs:               clients.jobs,
-		Config:             jobCfg,
-		Artifacts:          artifacts,
-		MaxConcurrent:      cfg.Kubernetes.MaxConcurrentJobs,
-		JobLock:            jobLock,
+		WorkflowDefinitions: repository.NewWorkflowDefinitionRepository(clients.workflows),
+		ProviderRepository:  repository.NewProviderRepository(clients.providers, clients.core.Secrets(cfg.Kubernetes.Namespace)),
+		Workflows:           workflows,
+		Jobs:                clients.jobs,
+		Config:              jobCfg,
+		Artifacts:           artifacts,
+		MaxConcurrent:       cfg.Kubernetes.MaxConcurrentJobs,
+		JobLock:             jobLock,
 		VideoRuns: &VideoRunController{
 			Runs:     clients.runs,
 			Executor: executor,
@@ -126,6 +128,7 @@ func newClusterClients(namespace string) (clusterClients, error) {
 	}
 
 	return clusterClients{
+		workflows: dynamicClient.Resource(repository.VideoWorkflowResource()).Namespace(namespace),
 		jobs:      batchClient.Jobs(namespace),
 		core:      coreClient,
 		runs:      dynamicClient.Resource(VideoRunResource()).Namespace(namespace),
@@ -147,6 +150,10 @@ func verifyClusterAccess(ctx context.Context, clients clusterClients, namespace 
 
 	if _, err := clients.providers.List(probeCtx, metav1.ListOptions{Limit: 1}); err != nil {
 		return fmt.Errorf("verify VideoProvider access: %w", err)
+	}
+
+	if _, err := clients.workflows.List(probeCtx, metav1.ListOptions{Limit: 1}); err != nil {
+		return fmt.Errorf("verify VideoWorkflow access: %w", err)
 	}
 
 	claim, err := clients.core.PersistentVolumeClaims(namespace).Get(probeCtx, jobCfg.Claim, metav1.GetOptions{})

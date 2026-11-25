@@ -168,3 +168,9 @@ Create a provider with its Kubernetes name, type and supported capabilities. Gem
 The API accepts official provider endpoints for writes. The built-in Mock remains available without configuration, and the versioned list returns persisted VideoProvider resources. The connectivity check validates local Mock configuration or calls the [Gemini model catalog](https://ai.google.dev/api/models) or [fal model pricing API](https://fal.ai/docs/documentation/model-apis/pricing) without submitting generation. fal checks the first configured model. A successful metadata check does not establish access to paid generation.
 
 For an existing Helm installation, apply the updated CRD before upgrading the chart so Kubernetes preserves the enabled setting.
+
+### Workflow management
+
+The authenticated [Workflow API](docs/workflow-api.yaml) manages reusable VideoWorkflow definitions in Kubernetes mode. POST accepts a Kubernetes resource name as `id` and the workflow definition as `spec`. GET returns that spec for export and accepts `limit` and `continue` on the list. PATCH takes only the fields to change under `spec`. Arrays replace the corresponding whole field. Include the returned `resourceVersion` to detect edits made since the definition was read.
+
+Deleting a definition preserves existing runs and their workflow snapshots. For browser writes, send the session's CSRF token. Scripted clients can authenticate with a Bearer token.

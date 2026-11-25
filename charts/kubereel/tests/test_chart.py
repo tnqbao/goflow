@@ -92,6 +92,7 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(env["INSTANCE_NAME"], "test")
         self.assertEqual(docs["Role"]["rules"][0]["verbs"], ["get", "list", "watch", "create", "delete"])
         self.assertIn({"apiGroups": ["kubereel.io"], "resources": ["videoruns", "videoproviders"], "verbs": ["get", "list", "watch"]}, docs["Role"]["rules"])
+        self.assertIn({"apiGroups": ["kubereel.io"], "resources": ["videoworkflows"], "verbs": ["get", "list", "create", "update", "delete"]}, docs["Role"]["rules"])
         self.assertIn({"apiGroups": ["kubereel.io"], "resources": ["videoruns/status"], "verbs": ["update"]}, docs["Role"]["rules"])
         self.assertEqual(container["livenessProbe"]["httpGet"]["path"], "/healthz")
         self.assertEqual(container["readinessProbe"]["httpGet"]["path"], "/readyz")

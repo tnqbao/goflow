@@ -576,6 +576,48 @@ provider_request('POST', payload={
 assert provider_request('PATCH', '/managed-gemini', {'apiKey': 'e2e-fake-provider-key-rotated'})['credentialsReferenced']
 provider_request('DELETE', '/managed-gemini', expected=204)
 
+# Exercise workflow definition CRUD through real CRD validation and RBAC.
+def workflow_request(method, path='', payload=None, expected=200, headers=auth_headers):
+    request = urllib.request.Request(
+        base + '/api/v1/workflows' + path,
+        data=None if payload is None else json.dumps(payload).encode(),
+        method=method, headers={**headers, 'Content-Type': 'application/json'},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            assert response.status == expected
+            body = response.read()
+        return json.loads(body) if body else None
+    except urllib.error.HTTPError as error:
+        if error.code != expected:
+            raise RuntimeError(f'workflow API {method} {path}: {error.code} {error.read()}') from error
+
+workflow_request('GET', expected=401, headers={})
+good_step = {'name': 'image', 'type': 'image', 'providerRef': 'mock', 'retry': {'maxAttempts': 2}}
+workflow_request('POST', payload={
+    'id': 'invalid-definition', 'spec': {'steps': [{**good_step, 'unexpectedField': True}]},
+}, expected=400)
+workflow_request('POST', payload={
+    'id': 'invalid-definition', 'spec': {'steps': [{**good_step, 'dependsOn': ['missing']}]},
+}, expected=400)
+created = workflow_request('POST', payload={
+    'id': 'managed-definition', 'spec': {'steps': [good_step], 'outputs': [{'name': 'image', 'from': 'image'}]},
+}, expected=201)
+version = created['resourceVersion']
+assert version and created['spec']['steps'] == [good_step]
+workflow_request('POST', payload={'id': 'managed-definition', 'spec': {'steps': [good_step]}}, expected=409)
+page = workflow_request('GET', '?limit=1')
+assert len(page['items']) == 1 and page['continue']
+next_page = workflow_request('GET', '?limit=1&' + urllib.parse.urlencode({'continue': page['continue']}))
+assert len(next_page['items']) == 1 and next_page['items'][0]['id'] != page['items'][0]['id']
+workflow_request('PATCH', '/managed-definition', {'spec': {'outputs': [{'name': 'bad', 'from': 'missing'}]}}, expected=400)
+updated = workflow_request('PATCH', '/managed-definition', {'resourceVersion': version, 'spec': {'description': 'updated'}})
+assert updated['spec']['steps'] == [good_step] and updated['spec']['description'] == 'updated'
+workflow_request('PATCH', '/managed-definition', {'resourceVersion': version, 'spec': {'description': 'stale'}}, expected=409)
+assert workflow_request('GET', '/managed-definition')['spec']['description'] == 'updated'
+workflow_request('DELETE', '/managed-definition', expected=204)
+workflow_request('GET', '/managed-definition', expected=404)
+
 # 3. Verify authenticated API workflow execution and protected MP4 artifact download.
 providers_req = urllib.request.Request(base + '/api/providers', headers=auth_headers)
 with urllib.request.urlopen(providers_req, timeout=5) as response:

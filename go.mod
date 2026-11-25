@@ -11,6 +11,7 @@ require (
 	k8s.io/apimachinery v0.32.10
 	k8s.io/client-go v0.32.10
 	modernc.org/sqlite v1.34.5
+	sigs.k8s.io/json v0.0.0-20241010143419-9aa6b5e7a4b3
 )
 
 require (
@@ -58,7 +59,6 @@ require (
 	modernc.org/libc v1.55.3 // indirect
 	modernc.org/mathutil v1.6.0 // indirect
 	modernc.org/memory v1.8.0 // indirect
-	sigs.k8s.io/json v0.0.0-20241010143419-9aa6b5e7a4b3 // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.4.2 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
 )

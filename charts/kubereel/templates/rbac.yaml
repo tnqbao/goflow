@@ -28,6 +28,9 @@ rules:
     resources: ["secrets"]
     verbs: ["create", "get"]
   - apiGroups: ["kubereel.io"]
+    resources: ["videoworkflows"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: ["kubereel.io"]
     resources: ["videoruns/status"]
     verbs: ["update"]
 ---

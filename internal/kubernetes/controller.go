@@ -38,14 +38,15 @@ type Jobs interface {
 
 // Controller reconciles durable workflow executions and runs the VideoRun controller.
 type Controller struct {
-	ProviderRepository *repository.ProviderRepository
-	Workflows          *service.WorkflowService
-	Jobs               Jobs
-	Config             JobConfig
-	Artifacts          storage.Store
-	MaxConcurrent      int
-	VideoRuns          *VideoRunController
-	JobLock            *sync.Mutex
+	WorkflowDefinitions *repository.WorkflowDefinitionRepository
+	ProviderRepository  *repository.ProviderRepository
+	Workflows           *service.WorkflowService
+	Jobs                Jobs
+	Config              JobConfig
+	Artifacts           storage.Store
+	MaxConcurrent       int
+	VideoRuns           *VideoRunController
+	JobLock             *sync.Mutex
 }
 
 // Run reconciles durable workflow state until ctx is cancelled.

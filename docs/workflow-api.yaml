@@ -1,0 +1,132 @@
+openapi: 3.0.3
+info:
+  title: KubeReel Workflow Management API
+  version: "1"
+servers:
+  - url: /api/v1
+security:
+  - bearer: []
+  - session: []
+    csrf: []
+paths:
+  /workflows:
+    get:
+      summary: List workflow definitions in the installation namespace
+      security:
+        - bearer: []
+        - session: []
+      parameters:
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+        - name: continue
+          in: query
+          schema: {type: string, maxLength: 4096}
+      responses:
+        "200":
+          description: Workflow page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/Definition"}
+                  continue: {type: string}
+        "410": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+    post:
+      summary: Create a reusable workflow definition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, spec]
+              additionalProperties: false
+              properties:
+                id: {type: string, maxLength: 253, description: Kubernetes resource name}
+                spec: {$ref: "#/components/schemas/Spec"}
+      responses:
+        "201":
+          description: Workflow created
+          headers:
+            Location:
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Definition"}
+        default: {$ref: "#/components/responses/Error"}
+  /workflows/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: {type: string}
+    get:
+      summary: Read a workflow definition
+      security:
+        - bearer: []
+        - session: []
+      responses:
+        "200": {$ref: "#/components/responses/Definition"}
+        default: {$ref: "#/components/responses/Error"}
+    patch:
+      summary: Replace selected fields of the workflow spec
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [spec]
+              additionalProperties: false
+              properties:
+                resourceVersion: {type: string, description: Version returned by GET. A stale version yields HTTP 409.}
+                spec:
+                  type: object
+                  minProperties: 1
+                  description: Use fields from the workflow spec. Omitted fields are preserved. Submitted arrays replace whole arrays. Use null to remove optional fields.
+                  example: {description: Revised workflow}
+      responses:
+        "200": {$ref: "#/components/responses/Definition"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      summary: Delete the reusable workflow definition while preserving dependent resources
+      responses:
+        "204": {description: Deleted}
+        default: {$ref: "#/components/responses/Error"}
+components:
+  securitySchemes:
+    bearer: {type: http, scheme: bearer}
+    session: {type: apiKey, in: cookie, name: kubereel_session}
+    csrf: {type: apiKey, in: header, name: X-CSRF-Token}
+  schemas:
+    Spec:
+      $ref: "../charts/kubereel/crds/kubereel.io_videoworkflows.yaml#/spec/versions/0/schema/openAPIV3Schema/properties/spec"
+    Definition:
+      type: object
+      required: [id, resourceVersion, spec]
+      properties:
+        id: {type: string}
+        resourceVersion: {type: string}
+        spec: {$ref: "#/components/schemas/Spec"}
+  responses:
+    Definition:
+      description: Workflow definition
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Definition"}
+    Error:
+      description: Request, authorization, or persistence error
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error, message]
+            properties:
+              error: {type: string}
+              message: {type: string}
