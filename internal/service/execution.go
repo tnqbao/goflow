@@ -71,34 +71,42 @@ func (s *Executions) Create(ctx context.Context, id string, opts ExecutionOption
 	if err != nil {
 		return Execution{}, err
 	}
-	snapshot, _, err := unstructured.NestedMap(definition.Object, "spec")
+	spec, err := executionSpec(definition, opts)
 	if err != nil {
 		return Execution{}, err
-	}
-	if err := validateWorkflowSpec(snapshot); err != nil {
-		return Execution{}, err
-	}
-	if err := validateExecutionInputs(snapshot, opts.Inputs); err != nil {
-		return Execution{}, err
-	}
-	if opts.MaxConcurrentSteps < 0 || opts.MaxConcurrentSteps > 100 {
-		return Execution{}, fmt.Errorf("%w: maxConcurrentSteps must be between 1 and 100 when set", workflow.ErrInvalid)
-	}
-	if err := checkPaidExecution(snapshot, opts.AllowPaid); err != nil {
-		return Execution{}, err
-	}
-	spec := map[string]any{"workflowRef": id, "workflowSnapshot": snapshot}
-	if opts.Inputs != nil {
-		spec["inputs"] = opts.Inputs
-	}
-	if opts.MaxConcurrentSteps > 0 {
-		spec["execution"] = map[string]any{"maxConcurrentSteps": opts.MaxConcurrentSteps}
 	}
 	run, err := s.repo.Create(ctx, "", nil, spec)
 	if err != nil {
 		return Execution{}, err
 	}
 	return executionView(run), nil
+}
+
+func executionSpec(definition *unstructured.Unstructured, opts ExecutionOptions) (map[string]any, error) {
+	snapshot, _, err := unstructured.NestedMap(definition.Object, "spec")
+	if err != nil {
+		return nil, err
+	}
+	if err := validateWorkflowSpec(snapshot); err != nil {
+		return nil, err
+	}
+	if err := validateExecutionInputs(snapshot, opts.Inputs); err != nil {
+		return nil, err
+	}
+	if opts.MaxConcurrentSteps < 0 || opts.MaxConcurrentSteps > 100 {
+		return nil, fmt.Errorf("%w: maxConcurrentSteps must be between 1 and 100 when set", workflow.ErrInvalid)
+	}
+	if err := checkPaidExecution(snapshot, opts.AllowPaid); err != nil {
+		return nil, err
+	}
+	spec := map[string]any{"workflowRef": definition.GetName(), "workflowSnapshot": snapshot}
+	if opts.Inputs != nil {
+		spec["inputs"] = opts.Inputs
+	}
+	if opts.MaxConcurrentSteps > 0 {
+		spec["execution"] = map[string]any{"maxConcurrentSteps": opts.MaxConcurrentSteps}
+	}
+	return spec, nil
 }
 
 func (s *Executions) List(ctx context.Context, limit int64, cursor string) (ExecutionPage, error) {

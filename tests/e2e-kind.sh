@@ -695,6 +695,37 @@ workflow_request('DELETE', '/managed-definition', expected=204)
 workflow_request('GET', '/managed-definition', expected=404)
 assert run_request('GET', run_path)['phase'] == 'Succeeded'
 
+workflow_request('POST', payload={'id': 'scheduled-definition', 'spec': {
+    'inputs': [{'name': 'prompt', 'type': 'string', 'required': True}],
+    'steps': [good_step],
+}}, expected=201)
+schedule_path = '/scheduled-definition/schedule'
+workflow_request('GET', schedule_path, expected=401, headers={})
+workflow_request('PUT', schedule_path, {'cron': 'invalid'}, expected=400)
+workflow_request('PUT', schedule_path, {'cron': '* * * * *'}, expected=400)
+config = {'cron': '* * * * *', 'inputs': {'prompt': {'stringValue': 'Scheduled Mock'}}}
+paused = workflow_request('PUT', schedule_path, {**config, 'paused': True})
+assert paused['paused'] is True and not paused.get('lastRunId')
+assert workflow_request('GET', schedule_path)['cron'] == config['cron']
+enabled = workflow_request('PUT', schedule_path, config)
+assert not enabled.get('paused')
+assert workflow_request('PUT', schedule_path, config)['updatedAt'] == enabled['updatedAt']
+deadline = time.monotonic() + 85
+while time.monotonic() < deadline:
+    scheduled = workflow_request('GET', schedule_path)
+    if scheduled.get('lastRunId'):
+        break
+    time.sleep(2)
+else:
+    raise RuntimeError('scheduled workflow did not produce a VideoRun')
+scheduled_path = '/runs/' + scheduled['lastRunId']
+assert scheduled['lastRunId'].startswith('scheduled-')
+workflow_request('DELETE', schedule_path, expected=204)
+workflow_request('GET', schedule_path, expected=404)
+assert wait_run(scheduled_path, 'Succeeded')['workflowId'] == 'scheduled-definition'
+workflow_request('DELETE', '/scheduled-definition', expected=204)
+
+
 # 3. Verify authenticated API workflow execution and protected MP4 artifact download.
 providers_req = urllib.request.Request(base + '/api/providers', headers=auth_headers)
 with urllib.request.urlopen(providers_req, timeout=5) as response:

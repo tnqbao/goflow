@@ -67,9 +67,12 @@ func NewControllerFromCluster(
 		JobLock:       jobLock,
 	}
 
+	definitions := repository.NewWorkflowDefinitionRepository(clients.workflows)
+	runs := repository.NewExecutionRepository(clients.runs, clients.jobs, clients.core.Pods(cfg.Kubernetes.Namespace))
 	return &Controller{
-		ExecutionRepository: repository.NewExecutionRepository(clients.runs, clients.jobs, clients.core.Pods(cfg.Kubernetes.Namespace)),
-		WorkflowDefinitions: repository.NewWorkflowDefinitionRepository(clients.workflows),
+		Schedules:           service.NewSchedules(definitions, runs),
+		ExecutionRepository: runs,
+		WorkflowDefinitions: definitions,
 		ProviderRepository:  repository.NewProviderRepository(clients.providers, clients.core.Secrets(cfg.Kubernetes.Namespace)),
 		Workflows:           workflows,
 		Jobs:                clients.jobs,

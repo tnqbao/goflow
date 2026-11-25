@@ -10,6 +10,7 @@ import (
 
 // Router groups the application services required by HTTP API controllers.
 type Router struct {
+	Schedules           *service.Schedules
 	Artifacts           *service.Artifacts
 	Executions          *service.Executions
 	WorkflowDefinitions *service.WorkflowDefinitions
@@ -29,4 +30,5 @@ func (r Router) Register(e *echo.Echo) {
 	(controller.WorkflowDefinitionController{Service: r.WorkflowDefinitions}).Register(e, authGuard)
 	(controller.ExecutionController{Service: r.Executions}).Register(e, authGuard)
 	(controller.ArtifactController{Service: r.Artifacts}).Register(e, authGuard)
+	(controller.ScheduleController{Service: r.Schedules}).Register(e, authGuard)
 }

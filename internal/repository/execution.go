@@ -34,6 +34,15 @@ func (r *ExecutionRepository) List(ctx context.Context, limit int64, cursor stri
 }
 
 func (r *ExecutionRepository) Create(ctx context.Context, name string, annotations map[string]string, spec map[string]any) (*unstructured.Unstructured, error) {
+	return r.runs.Create(ctx, videoRunObject(name, annotations, spec), metav1.CreateOptions{FieldValidation: metav1.FieldValidationStrict})
+}
+
+func (r *ExecutionRepository) ValidateSpec(ctx context.Context, spec map[string]any) error {
+	_, err := r.runs.Create(ctx, videoRunObject("", nil, spec), metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}, FieldValidation: metav1.FieldValidationStrict})
+	return err
+}
+
+func videoRunObject(name string, annotations map[string]string, spec map[string]any) *unstructured.Unstructured {
 	item := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
 	item.SetGroupVersionKind(VideoRunResource().GroupVersion().WithKind("VideoRun"))
 	item.SetAnnotations(annotations)
@@ -41,7 +50,7 @@ func (r *ExecutionRepository) Create(ctx context.Context, name string, annotatio
 	if name == "" {
 		item.SetGenerateName("run-")
 	}
-	return r.runs.Create(ctx, item, metav1.CreateOptions{FieldValidation: metav1.FieldValidationStrict})
+	return item
 }
 
 func (r *ExecutionRepository) RequestCancel(ctx context.Context, item *unstructured.Unstructured) (*unstructured.Unstructured, error) {

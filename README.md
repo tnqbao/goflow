@@ -188,3 +188,9 @@ A run exposes its step status and recorded artifact keys. The log endpoint reads
 The authenticated [Artifact API](docs/artifact-api.yaml) lists available files published by Kubernetes VideoRuns. Filter the list with `runId` and use the returned artifact IDs to fetch metadata, download byte ranges or delete files. Follow `continue` until it is absent, including when a page is empty.
 
 Deletion requires a settled run and no active Jobs. It removes the file while preserving the historical reference in run status. The catalog skips deleted and expired files. The older SQLite workflow prototype continues to serve its MP4 output through its existing workflow download endpoint.
+
+### Scheduled execution
+
+Use the authenticated [Schedule API](docs/schedule-api.yaml) at `/api/v1/workflows/{id}/schedule` to set one recurring schedule per Kubernetes workflow. Supply a five-field UTC cron expression and the typed inputs needed by the workflow. Include `allowPaid: true` to approve recurring use of external providers. PUT replaces the schedule, and `paused: true` pauses future submissions. To resume, PUT the schedule with `paused: false`.
+
+Each launch snapshots the current workflow definition. After downtime, the scheduler evaluates only the newest occurrence within the last 15 minutes. It skips occurrences while the previous scheduled run has active work or needs review. Pause and deletion leave submitted runs in place, and a submission already in progress can complete. Use the Execution API to cancel a submitted run.

@@ -38,6 +38,7 @@ type Jobs interface {
 
 // Controller reconciles durable workflow executions and runs the VideoRun controller.
 type Controller struct {
+	Schedules           *service.Schedules
 	ExecutionRepository *repository.ExecutionRepository
 	WorkflowDefinitions *repository.WorkflowDefinitionRepository
 	ProviderRepository  *repository.ProviderRepository
@@ -52,6 +53,15 @@ type Controller struct {
 
 // Run reconciles durable workflow state until ctx is cancelled.
 func (c *Controller) Run(ctx context.Context) {
+	if c.Schedules != nil {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			c.Schedules.Run(ctx)
+		}()
+		defer func() { <-done }()
+	}
+
 	if c.VideoRuns != nil {
 		done := make(chan struct{})
 		go func() {
