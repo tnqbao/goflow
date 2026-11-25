@@ -17,7 +17,7 @@ storage:
   accessMode: ReadWriteOnce
   existingClaim: ""
   maxArtifactBytes: 1073741824
-  # Zero disables artifact expiry. Cleanup must be invoked for terminal runs.
+  # Zero disables artifact expiry for successful VideoRuns.
   retentionSeconds: 0
 
 resources:

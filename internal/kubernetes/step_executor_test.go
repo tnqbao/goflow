@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tnqbao/kubereel/internal/mock"
 	batchv1 "k8s.io/api/batch/v1"
@@ -67,6 +68,13 @@ func TestStepJobRunsMockImage(t *testing.T) {
 	artifacts, _, _ := unstructured.NestedStringSlice(got.Object, "status", "artifacts")
 	if phase != "Succeeded" || len(artifacts) != 1 || artifacts[0] != filepath.Join("workflows", id, "scene.svg") {
 		t.Fatalf("status = %v", got.Object["status"])
+	}
+	completedAt, found, err := unstructured.NestedString(got.Object, "status", "completedAt")
+	if err != nil || !found {
+		t.Fatalf("completion time: %q, %v", completedAt, err)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, completedAt); err != nil {
+		t.Fatalf("invalid completion time %q: %v", completedAt, err)
 	}
 	if err := controller.Reconcile(ctx, "sample"); err != nil {
 		t.Fatal(err)

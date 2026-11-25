@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"time"
 
 	"github.com/tnqbao/kubereel/internal/workflow"
 	batchv1 "k8s.io/api/batch/v1"
@@ -39,7 +40,7 @@ func (c *VideoRunController) Run(ctx context.Context) {
 	informer := cache.NewSharedIndexInformer(&cache.ListWatch{
 		ListFunc:  func(options metav1.ListOptions) (runtime.Object, error) { return c.Runs.List(ctx, options) },
 		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) { return c.Runs.Watch(ctx, options) },
-	}, &unstructured.Unstructured{}, 0, nil)
+	}, &unstructured.Unstructured{}, time.Minute, nil)
 	enqueue := func(object interface{}) {
 		key, err := cache.MetaNamespaceKeyFunc(object)
 		if err != nil {
@@ -136,6 +137,13 @@ func (c *VideoRunController) Reconcile(ctx context.Context, name string) error {
 	if run.GetDeletionTimestamp() != nil {
 		return nil
 	}
+	phase, _, err := unstructured.NestedString(run.Object, "status", "phase")
+	if err != nil {
+		return err
+	}
+	if phase == "Succeeded" && c.Executor != nil {
+		return c.Executor.cleanupArtifacts(ctx, run, time.Now())
+	}
 	cancelled, _, err := unstructured.NestedBool(run.Object, "spec", "cancelRequested")
 	if err != nil {
 		return err
@@ -145,10 +153,6 @@ func (c *VideoRunController) Reconcile(ctx context.Context, name string) error {
 	}
 	if cancelled {
 		return nil
-	}
-	phase, _, err := unstructured.NestedString(run.Object, "status", "phase")
-	if err != nil {
-		return err
 	}
 	if c.Executor != nil && (phase == "Failed" || phase == "RequiresReview" || phase == "Cancelling") {
 		return c.Executor.Cancel(ctx, run)

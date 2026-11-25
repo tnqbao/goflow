@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tnqbao/kubereel/internal/mock"
 	"github.com/tnqbao/kubereel/internal/storage"
@@ -290,6 +291,7 @@ func (e *StepExecutor) recordSuccess(ctx context.Context, run *unstructured.Unst
 		return updateVideoRunStatus(ctx, e.Runs, run, status)
 	}
 	status["phase"] = "Succeeded"
+	status["completedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
 	if err := validateRunOutputs(run, statuses); err != nil {
 		status["phase"] = "Failed"
 		status["error"] = err.Error()
