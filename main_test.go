@@ -30,6 +30,7 @@ func TestBaseRoutes(t *testing.T) {
 		{http.MethodGet, "/healthz", http.StatusOK},
 		{http.MethodGet, "/readyz", http.StatusOK},
 		{http.MethodHead, "/healthz", http.StatusOK},
+		{http.MethodHead, "/readyz", http.StatusOK},
 		{http.MethodPost, "/healthz", http.StatusMethodNotAllowed},
 		{http.MethodPost, "/readyz", http.StatusMethodNotAllowed},
 		{http.MethodGet, "/", http.StatusSeeOther},

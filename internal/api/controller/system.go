@@ -21,6 +21,7 @@ func (ctrl SystemController) Register(e *echo.Echo) {
 	e.GET("/healthz", ctrl.Health)
 	e.HEAD("/healthz", ctrl.Health)
 	e.GET("/readyz", ctrl.Readiness)
+	e.HEAD("/readyz", ctrl.Readiness)
 }
 
 // RedirectRoot redirects the root path to the workflows view.
