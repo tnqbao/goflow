@@ -10,7 +10,7 @@ KubeReel runs as a single Go executable and single container image (`iamqbao/kub
 
 - `kubereel serve` — starts the HTTP server, embedded dashboard, and Kubernetes controllers.
 - `kubereel worker` — executes an assigned workflow step inside a temporary Kubernetes Job.
-- `kubereel render` — executes media rendering inside a temporary Kubernetes Job.
+- `kubereel render` — executes controlled FFmpeg media operations (`merge`, `trim`, `resize`, `aspect_ratio`, `add_audio`, `normalize`, `render_mp4`) inside an isolated scratch directory without shell execution.
 
 Kubernetes state is managed via three CRDs (`VideoWorkflow`, `VideoRun`, `VideoProvider`) and PVC-backed artifact storage, with no external database or message broker required.
 
@@ -140,5 +140,5 @@ python3 charts/kubereel/tests/test_chart.py
 
 ## Current Status & Limitations
 
-- The `mock` provider is enabled out of the box (no API keys required). Real provider integrations (Gemini, fal.ai), FFmpeg workflow rendering, authentication, and the `/api/v1` contract are in active development.
-- Current Kubernetes execution runs `image` steps using `mock` to produce SVG artifacts; failed Jobs retry up to `maxAttempts`, while missing/uncertain Jobs transition to `RequiresReview` rather than risking duplicate submission.
+- The `mock` provider is enabled out of the box (no API keys required). Real provider integrations (Gemini, fal.ai), the complete Mock end-to-end MP4 workflow, authentication, and the `/api/v1` contract are in active development.
+- Current `VideoRun` execution supports `image` steps (`providerRef: mock`, producing SVG artifacts) and `ffmpeg` steps (`merge`, `trim`, `resize`, `aspect_ratio`, `add_audio`, `normalize`, `render_mp4`, producing validated H.264 MP4 artifacts); failed Jobs retry up to `maxAttempts`, while missing/uncertain Jobs transition to `RequiresReview` rather than risking duplicate submission.

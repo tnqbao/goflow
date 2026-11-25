@@ -1,23 +1,26 @@
 package kubernetes
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
+	"path"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/tnqbao/kubereel/internal/mock"
+	"github.com/tnqbao/kubereel/internal/renderer"
 	"github.com/tnqbao/kubereel/internal/storage"
 	"github.com/tnqbao/kubereel/internal/workflow"
 	batchv1 "k8s.io/api/batch/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 )
 
@@ -35,10 +38,12 @@ type StepExecutor struct {
 }
 
 type executableStep struct {
-	Name           string `json:"name"`
-	Type           string `json:"type"`
-	ProviderRef    string `json:"providerRef"`
-	TimeoutSeconds int64  `json:"timeoutSeconds"`
+	Name           string            `json:"name"`
+	Type           string            `json:"type"`
+	DependsOn      []string          `json:"dependsOn"`
+	ProviderRef    string            `json:"providerRef"`
+	FFmpeg         *renderer.Request `json:"ffmpeg"`
+	TimeoutSeconds int64             `json:"timeoutSeconds"`
 	Retry          struct {
 		MaxAttempts int64 `json:"maxAttempts"`
 	} `json:"retry"`
@@ -66,6 +71,8 @@ func (e *StepExecutor) Reconcile(
 		return err
 	}
 
+	stepsByName := indexExecutableSteps(steps)
+
 	statuses, byName, err := stepStatuses(status)
 	if err != nil {
 		return err
@@ -79,7 +86,7 @@ func (e *StepExecutor) Reconcile(
 	runningSteps := countRunningSteps(byName)
 
 	for _, step := range steps {
-		if !isSupportedMockImageStep(step) {
+		if !isSupportedExecutableStep(step) {
 			continue
 		}
 
@@ -107,23 +114,15 @@ func (e *StepExecutor) Reconcile(
 			continue
 		}
 
-		prompt, valid, err := readMockPrompt(run)
+		payload, inputFile, invalidReason, err := prepareStepPayload(run, step, stepsByName, byName)
 		if err != nil {
 			return err
 		}
-		if !valid {
-			return e.setRunAndStepState(
-				ctx,
-				run,
-				status,
-				statuses,
-				entry,
-				"Failed",
-				"mock image requires a nonempty prompt of at most 8192 bytes",
-			)
+		if invalidReason != "" {
+			return e.setRunAndStepState(ctx, run, status, statuses, entry, "Failed", invalidReason)
 		}
 
-		return e.submitStep(ctx, run, status, statuses, step, entry, prompt)
+		return e.submitStep(ctx, run, status, statuses, step, entry, inputFile, payload)
 	}
 
 	return nil
@@ -141,6 +140,19 @@ func isSupportedMockImageStep(step executableStep) bool {
 	return step.Type == "image" && step.ProviderRef == "mock"
 }
 
+func isSupportedExecutableStep(step executableStep) bool {
+	return isSupportedMockImageStep(step) || step.Type == "ffmpeg"
+}
+
+func indexExecutableSteps(steps []executableStep) map[string]executableStep {
+	indexed := make(map[string]executableStep, len(steps))
+	for _, step := range steps {
+		indexed[step.Name] = step
+	}
+
+	return indexed
+}
+
 func countRunningSteps(byName map[string]map[string]interface{}) int64 {
 	var count int64
 	for _, entry := range byName {
@@ -150,6 +162,125 @@ func countRunningSteps(byName map[string]map[string]interface{}) int64 {
 	}
 
 	return count
+}
+
+func prepareStepPayload(
+	run *unstructured.Unstructured,
+	step executableStep,
+	stepsByName map[string]executableStep,
+	statusesByName map[string]map[string]interface{},
+) ([]byte, string, string, error) {
+	if step.Type == "ffmpeg" {
+		return prepareFFmpegPayload(run.GetUID(), step, stepsByName, statusesByName)
+	}
+
+	prompt, valid, err := readMockPrompt(run)
+	if err != nil {
+		return nil, "", "", err
+	}
+	if !valid {
+		return nil, "", "mock image requires a nonempty prompt of at most 8192 bytes", nil
+	}
+
+	payload, err := json.Marshal(mock.Request{Prompt: prompt})
+	if err != nil {
+		return nil, "", "", fmt.Errorf("encode mock request: %w", err)
+	}
+
+	return payload, "request.json", "", nil
+}
+
+func prepareFFmpegPayload(
+	uid types.UID,
+	step executableStep,
+	stepsByName map[string]executableStep,
+	statusesByName map[string]map[string]interface{},
+) ([]byte, string, string, error) {
+	if step.ProviderRef != "" {
+		return nil, "", "ffmpeg step must not set providerRef", nil
+	}
+	if step.FFmpeg == nil {
+		return nil, "", "ffmpeg step requires ffmpeg configuration", nil
+	}
+
+	req := *step.FFmpeg
+	rawInputs := req.Inputs
+	if len(rawInputs) == 0 && len(step.DependsOn) > 0 {
+		rawInputs = step.DependsOn
+	}
+
+	resolvedInputs, invalidReason, err := resolveFFmpegInputs(uid, step, rawInputs, stepsByName, statusesByName)
+	if err != nil || invalidReason != "" {
+		return nil, "", invalidReason, err
+	}
+	req.Inputs = resolvedInputs
+
+	if req.AudioInput != "" {
+		audioKey, audioReason, audioErr := resolveFFmpegReference(uid, step, req.AudioInput, stepsByName, statusesByName)
+		if audioErr != nil || audioReason != "" {
+			return nil, "", audioReason, audioErr
+		}
+		req.AudioInput = audioKey
+	}
+
+	if err := renderer.ValidateRequest(req); err != nil {
+		return nil, "", err.Error(), nil
+	}
+
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("encode ffmpeg request: %w", err)
+	}
+
+	return payload, "render.json", "", nil
+}
+
+func resolveFFmpegInputs(
+	uid types.UID,
+	step executableStep,
+	rawInputs []string,
+	stepsByName map[string]executableStep,
+	statusesByName map[string]map[string]interface{},
+) ([]string, string, error) {
+	resolved := make([]string, 0, len(rawInputs))
+	for _, item := range rawInputs {
+		key, invalidReason, err := resolveFFmpegReference(uid, step, item, stepsByName, statusesByName)
+		if err != nil || invalidReason != "" {
+			return nil, invalidReason, err
+		}
+		resolved = append(resolved, key)
+	}
+
+	return resolved, "", nil
+}
+
+func resolveFFmpegReference(
+	uid types.UID,
+	step executableStep,
+	ref string,
+	stepsByName map[string]executableStep,
+	statusesByName map[string]map[string]interface{},
+) (string, string, error) {
+	if !slices.Contains(step.DependsOn, ref) {
+		return ref, "", nil
+	}
+
+	depStep, exists := stepsByName[ref]
+	depStatus := statusesByName[ref]
+	if !exists || depStatus == nil || depStatus["phase"] != "Succeeded" {
+		return "", fmt.Sprintf("dependency step %q is not completed", ref), nil
+	}
+
+	attempt, err := stepAttempt(depStatus)
+	if err != nil {
+		return "", "", err
+	}
+	if attempt < 1 {
+		return "", fmt.Sprintf("dependency step %q has no recorded output", ref), nil
+	}
+
+	depWorkflowID := deterministicStepID(uid, depStep.Name, attempt)
+	return stepOutputArtifactKey(depStep, depWorkflowID), "", nil
 }
 
 func readMockPrompt(run *unstructured.Unstructured) (string, bool, error) {
@@ -221,7 +352,8 @@ func (e *StepExecutor) submitStep(
 	statuses []interface{},
 	step executableStep,
 	entry map[string]interface{},
-	prompt string,
+	inputFile string,
+	payload []byte,
 ) error {
 	available, err := e.hasAvailableJobSlot(ctx)
 	if err != nil || !available {
@@ -246,7 +378,7 @@ func (e *StepExecutor) submitStep(
 		return e.setRunAndStepState(ctx, run, status, statuses, entry, "RequiresReview", "recorded Job configuration is invalid")
 	}
 
-	job, err := StepJob(run.GetName(), run.GetUID(), step.Name, attempt+1, jobCfg)
+	job, err := stepJobForStep(run.GetName(), run.GetUID(), step, attempt+1, jobCfg)
 	if err != nil {
 		return err
 	}
@@ -263,7 +395,7 @@ func (e *StepExecutor) submitStep(
 	}
 
 	workflowID := job.Labels["kubereel.io/workflow"]
-	if err := publishMockRequest(ctx, e.Artifacts, workflowID, prompt); err != nil {
+	if err := publishStepPayload(ctx, e.Artifacts, workflowID, inputFile, payload); err != nil {
 		return fmt.Errorf("write step request: %w", err)
 	}
 
@@ -277,6 +409,15 @@ func (e *StepExecutor) submitStep(
 	}
 
 	return nil
+}
+
+func publishStepPayload(ctx context.Context, artifacts storage.Store, workflowID, inputFile string, payload []byte) error {
+	if !workflowIDPattern.MatchString(workflowID) {
+		return fmt.Errorf("invalid workflow ID")
+	}
+
+	requestKey := path.Join("workflows", workflowID, inputFile)
+	return artifacts.Put(ctx, requestKey, bytes.NewReader(payload))
 }
 
 func (e *StepExecutor) hasAvailableJobSlot(ctx context.Context) (bool, error) {
@@ -334,7 +475,7 @@ func (e *StepExecutor) observeRunningStep(
 		return true, e.setRunAndStepState(ctx, run, status, statuses, entry, "RequiresReview", "recorded Job configuration is invalid")
 	}
 
-	expectedJob, err := StepJob(run.GetName(), run.GetUID(), step.Name, attempt, jobCfg)
+	expectedJob, err := stepJobForStep(run.GetName(), run.GetUID(), step, attempt, jobCfg)
 	if err != nil {
 		return false, err
 	}
@@ -367,7 +508,7 @@ func (e *StepExecutor) observeRunningStep(
 		return false, nil
 	}
 
-	return true, e.recordStepSuccess(ctx, run, status, statuses, entry, expectedJob, true)
+	return true, e.recordStepSuccess(ctx, run, status, statuses, step, entry, expectedJob, true)
 }
 
 func (e *StepExecutor) recordStepSuccess(
@@ -375,14 +516,15 @@ func (e *StepExecutor) recordStepSuccess(
 	run *unstructured.Unstructured,
 	status map[string]interface{},
 	statuses []interface{},
+	step executableStep,
 	entry map[string]interface{},
 	job *batchv1.Job,
 	finishRun bool,
 ) error {
 	workflowID := job.Labels["kubereel.io/workflow"]
-	artifactPath := filepath.Join("workflows", workflowID, "scene.svg")
+	artifactKey := stepOutputArtifactKey(step, workflowID)
 
-	err := mock.ValidateSVG(ctx, e.Artifacts, filepath.ToSlash(artifactPath))
+	err := validateStepArtifact(ctx, e.Artifacts, step, artifactKey)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
@@ -401,7 +543,7 @@ func (e *StepExecutor) recordStepSuccess(
 	entry["ready"] = false
 	status["steps"] = statuses
 
-	if err := appendRunArtifact(status, artifactPath); err != nil {
+	if err := appendRunArtifact(status, artifactKey); err != nil {
 		return err
 	}
 
@@ -410,6 +552,14 @@ func (e *StepExecutor) recordStepSuccess(
 	}
 
 	return updateVideoRunStatus(ctx, e.Runs, run, status)
+}
+
+func validateStepArtifact(ctx context.Context, artifacts storage.Store, step executableStep, artifactKey string) error {
+	if step.Type == "ffmpeg" {
+		return renderer.ValidateMP4(ctx, artifacts, artifactKey)
+	}
+
+	return mock.ValidateSVG(ctx, artifacts, artifactKey)
 }
 
 func appendRunArtifact(status map[string]interface{}, artifactPath string) error {

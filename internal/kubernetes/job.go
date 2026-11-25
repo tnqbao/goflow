@@ -48,12 +48,16 @@ type ArtifactConfig struct {
 // Job builds a single worker or render Job using the control-plane image.
 // With RWO storage, pod affinity keeps workloads on the control-plane node.
 func Job(workflowID, stage string, cfg JobConfig) (*batchv1.Job, error) {
+	inputPath, outputPath := stageArtifactPaths(workflowID, stage)
+	return jobWithPaths(workflowID, stage, inputPath, outputPath, cfg)
+}
+
+func jobWithPaths(workflowID, stage, inputPath, outputPath string, cfg JobConfig) (*batchv1.Job, error) {
 	normalizedCfg, ttlSeconds, err := validateAndNormalizeJobConfig(workflowID, stage, cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	inputPath, outputPath := stageArtifactPaths(workflowID, stage)
 	var backoffLimit int32
 
 	job := &batchv1.Job{

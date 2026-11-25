@@ -284,6 +284,62 @@ if ! grep -q 'VideoRun mock image' "$workdir/image.svg"; then
   printf 'VideoRun image artifact did not contain the prompt\n' >&2
   exit 1
 fi
+if printf '%s\n' 'apiVersion: kubereel.io/v1alpha1' 'kind: VideoWorkflow' 'metadata: {name: bad-ffmpeg, namespace: kubereel-test}' 'spec: {steps: [{name: render, type: ffmpeg}]}' | kubectl --kubeconfig "$kubeconfig" apply --dry-run=server -f - >"$workdir/ffmpeg-invalid.log" 2>&1; then
+  printf 'ffmpeg step without configuration was accepted\n' >&2
+  exit 1
+fi
+if printf '%s\n' 'apiVersion: kubereel.io/v1alpha1' 'kind: VideoWorkflow' 'metadata: {name: bad-ffmpeg-provider, namespace: kubereel-test}' 'spec: {steps: [{name: render, type: ffmpeg, providerRef: mock, ffmpeg: {operation: normalize, inputs: [inputs/source.mp4]}}]}' | kubectl --kubeconfig "$kubeconfig" apply --dry-run=server -f - >>"$workdir/ffmpeg-invalid.log" 2>&1; then
+  printf 'ffmpeg step with providerRef was accepted\n' >&2
+  exit 1
+fi
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test exec deployment/kubereel-kubereel -- sh -eu -c '
+  mkdir -p /data/inputs
+  ffmpeg -nostdin -y -v error -f lavfi -i color=c=teal:s=640x480:r=10:d=1.2 -an -c:v mpeg4 /data/inputs/source.mp4
+'
+cat >"$workdir/ffmpeg-run.yaml" <<'YAML'
+apiVersion: kubereel.io/v1alpha1
+kind: VideoRun
+metadata:
+  name: ffmpeg-chain-run
+  namespace: kubereel-test
+spec:
+  workflowRef: sample
+  workflowSnapshot:
+    steps:
+      - name: trim
+        type: ffmpeg
+        timeoutSeconds: 60
+        ffmpeg:
+          operation: trim
+          inputs: [inputs/source.mp4]
+          startSeconds: 0.1
+          durationSeconds: 0.6
+      - name: resize
+        type: ffmpeg
+        dependsOn: [trim]
+        timeoutSeconds: 60
+        ffmpeg:
+          operation: resize
+          width: 320
+          height: 180
+    outputs:
+      - name: final
+        from: resize
+YAML
+kubectl --kubeconfig "$kubeconfig" apply -f "$workdir/ffmpeg-run.yaml"
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test wait --for=jsonpath='{.status.phase}'=Succeeded videorun/ffmpeg-chain-run --timeout=120s
+resize_job=$(kubectl --kubeconfig "$kubeconfig" -n kubereel-test get videorun ffmpeg-chain-run -o jsonpath='{.status.steps[1].jobName}')
+resize_id=$(printf '%s' "$resize_job" | sed 's/^kubereel-//;s/-render$//')
+ffmpeg_artifact="workflows/$resize_id/output.mp4"
+if ! kubectl --kubeconfig "$kubeconfig" -n kubereel-test get videorun ffmpeg-chain-run -o jsonpath='{.status.artifacts[*]}' | grep -Fq "$ffmpeg_artifact"; then
+  printf 'missing rendered artifact in VideoRun status: %s\n' "$ffmpeg_artifact" >&2
+  exit 1
+fi
+ffmpeg_probe=$(kubectl --kubeconfig "$kubeconfig" -n kubereel-test exec deployment/kubereel-kubereel -- ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height -of csv=p=0 "/data/$ffmpeg_artifact")
+if [ "$ffmpeg_probe" != "h264,320,180" ]; then
+  printf 'unexpected FFmpeg output stream: %s\n' "$ffmpeg_probe" >&2
+  exit 1
+fi
 cat >"$workdir/cancel-run.yaml" <<'YAML'
 apiVersion: kubereel.io/v1alpha1
 kind: VideoRun

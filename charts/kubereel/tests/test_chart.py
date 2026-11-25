@@ -36,6 +36,12 @@ class ChartTest(unittest.TestCase):
         self.assertTrue(version["served"] and version["storage"])
         spec = version["schema"]["openAPIV3Schema"]["properties"]["spec"]
         self.assertEqual(set(spec["properties"]), {"description", "inputs", "steps", "outputs"})
+        step_schema = spec["properties"]["steps"]["items"]
+        self.assertIn("ffmpeg", step_schema["properties"])
+        self.assertEqual(
+            set(step_schema["properties"]["ffmpeg"]["properties"]["operation"]["enum"]),
+            {"merge", "trim", "resize", "aspect_ratio", "add_audio", "normalize", "render_mp4"},
+        )
 
     def test_video_run_crd(self):
         docs = render("--include-crds")

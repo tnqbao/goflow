@@ -13,6 +13,10 @@ docker run --rm --entrypoint /bin/sh "$image" -eu -c '
     kubereel render --input /data/scene.svg --output /data/result.svg
     cmp /data/scene.svg /data/result.svg
 
+    printf "%s\n" '\''{"operation":"aspect_ratio","inputs":["probe.mp4"],"aspectRatio":"9:16"}'\'' > /data/render.json
+    kubereel render --input /data/render.json --output /data/rendered.mp4
+    test "$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height -of csv=p=0 /data/rendered.mp4)" = "h264,720,1280"
+
     kubereel serve &
     server=$!
     trap '\''kill "$server" 2>/dev/null || true'\'' EXIT

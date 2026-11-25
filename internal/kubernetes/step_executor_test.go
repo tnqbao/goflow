@@ -1,7 +1,11 @@
 package kubernetes
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/json"
+	"io"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -9,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tnqbao/kubereel/internal/mock"
+	"github.com/tnqbao/kubereel/internal/renderer"
 	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -304,5 +309,198 @@ func TestSharedJobLimitDuringConcurrentReconciliation(t *testing.T) {
 	}
 	if len(jobs.jobs) != 1 {
 		t.Fatalf("Jobs = %d, want 1 with shared limit", len(jobs.jobs))
+	}
+}
+
+func testValidMP4() []byte {
+	var buf bytes.Buffer
+	writeBox := func(boxType string, payload []byte) {
+		var header [8]byte
+		binary.BigEndian.PutUint32(header[:4], uint32(8+len(payload)))
+		copy(header[4:8], boxType)
+		buf.Write(header[:])
+		buf.Write(payload)
+	}
+	writeBox("ftyp", []byte("isom\x00\x00\x02\x00isomiso2mp41"))
+	writeBox("moov", []byte("movie-header"))
+	writeBox("mdat", []byte("video-payload"))
+	return buf.Bytes()
+}
+
+func TestStepExecutorRunsChainedFFmpegStepsAndCleanup(t *testing.T) {
+	ctx := context.Background()
+	steps := []interface{}{
+		map[string]interface{}{
+			"name": "trim",
+			"type": "ffmpeg",
+			"ffmpeg": map[string]interface{}{
+				"operation":       renderer.OpTrim,
+				"inputs":          []interface{}{"inputs/source.mp4"},
+				"startSeconds":    float64(0),
+				"durationSeconds": float64(1.0),
+			},
+		},
+		map[string]interface{}{
+			"name":      "resize",
+			"type":      "ffmpeg",
+			"dependsOn": []interface{}{"trim"},
+			"ffmpeg": map[string]interface{}{
+				"operation": renderer.OpResize,
+				"width":     int64(640),
+				"height":    int64(360),
+			},
+		},
+	}
+	run := testVideoRun(steps)
+	run.SetUID(types.UID("12345678-1234-1234-1234-123456789abc"))
+	run.Object["spec"].(map[string]interface{})["workflowSnapshot"].(map[string]interface{})["outputs"] = []interface{}{
+		map[string]interface{}{"name": "video", "from": "resize"},
+	}
+
+	controller, jobs := testStepController(t, run, 2)
+	reconcileTimes(t, controller, 2)
+	if len(jobs.jobs) != 1 {
+		t.Fatalf("Jobs = %d, want 1 for trim step", len(jobs.jobs))
+	}
+
+	var trimJob *batchv1.Job
+	for _, trimJob = range jobs.jobs {
+	}
+	if trimJob.Labels["kubereel.io/stage"] != StageRender || trimJob.Spec.Template.Spec.Containers[0].Args[0] != StageRender {
+		t.Fatalf("unexpected render Job: %+v", trimJob)
+	}
+
+	trimID := trimJob.Labels["kubereel.io/workflow"]
+	trimOut := filepath.ToSlash(filepath.Join("workflows", trimID, "output.mp4"))
+	if err := controller.Executor.Artifacts.Put(ctx, trimOut, bytes.NewReader(testValidMP4())); err != nil {
+		t.Fatal(err)
+	}
+	jobs.finish(trimID, StageRender, batchv1.JobComplete)
+
+	reconcileTimes(t, controller, 3)
+	if len(jobs.jobs) != 2 {
+		t.Fatalf("Jobs = %d, want 2 after resize submission", len(jobs.jobs))
+	}
+
+	var resizeJob *batchv1.Job
+	for _, candidate := range jobs.jobs {
+		if candidate.Name != trimJob.Name {
+			resizeJob = candidate
+		}
+	}
+	resizeID := resizeJob.Labels["kubereel.io/workflow"]
+	renderSpecObj, err := controller.Executor.Artifacts.Open(ctx, filepath.ToSlash(filepath.Join("workflows", resizeID, "render.json")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderSpecRaw, err := io.ReadAll(renderSpecObj)
+	_ = renderSpecObj.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var resolved renderer.Request
+	if err := json.Unmarshal(renderSpecRaw, &resolved); err != nil {
+		t.Fatal(err)
+	}
+	if len(resolved.Inputs) != 1 || resolved.Inputs[0] != trimOut {
+		t.Fatalf("resolved resize inputs = %v, want [%s]", resolved.Inputs, trimOut)
+	}
+
+	resizeOut := filepath.ToSlash(filepath.Join("workflows", resizeID, "output.mp4"))
+	if err := controller.Executor.Artifacts.Put(ctx, resizeOut, bytes.NewReader(testValidMP4())); err != nil {
+		t.Fatal(err)
+	}
+	jobs.finish(resizeID, StageRender, batchv1.JobComplete)
+	reconcileTimes(t, controller, 1)
+
+	got, err := controller.Runs.Get(ctx, "sample", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	phase, _, _ := unstructured.NestedString(got.Object, "status", "phase")
+	artifacts, _, _ := unstructured.NestedStringSlice(got.Object, "status", "artifacts")
+	if phase != "Succeeded" || len(artifacts) != 2 {
+		t.Fatalf("status = %v", got.Object["status"])
+	}
+	if err := controller.Executor.cleanupArtifacts(ctx, got, time.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("cleanupArtifacts = %v", err)
+	}
+}
+
+func TestStepExecutorRejectsInvalidFFmpegStep(t *testing.T) {
+	cases := []map[string]interface{}{
+		{"name": "missing-cfg", "type": "ffmpeg"},
+		{
+			"name":        "with-provider",
+			"type":        "ffmpeg",
+			"providerRef": "mock",
+			"ffmpeg":      map[string]interface{}{"operation": renderer.OpNormalize, "inputs": []interface{}{"a.mp4"}},
+		},
+		{
+			"name": "bad-db-input",
+			"type": "ffmpeg",
+			"ffmpeg": map[string]interface{}{
+				"operation": renderer.OpNormalize,
+				"inputs":    []interface{}{"kubereel.db"},
+			},
+		},
+		{
+			"name": "odd-width",
+			"type": "ffmpeg",
+			"ffmpeg": map[string]interface{}{
+				"operation": renderer.OpResize,
+				"inputs":    []interface{}{"a.mp4"},
+				"width":     int64(641),
+				"height":    int64(360),
+			},
+		},
+	}
+
+	for _, step := range cases {
+		run := testVideoRun([]interface{}{step})
+		run.SetUID(types.UID("12345678-1234-1234-1234-123456789abc"))
+		controller, jobs := testStepController(t, run, 1)
+		reconcileTimes(t, controller, 2)
+
+		got, err := controller.Runs.Get(context.Background(), "sample", metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		phase, _, _ := unstructured.NestedString(got.Object, "status", "phase")
+		if phase != "Failed" || len(jobs.jobs) != 0 {
+			t.Fatalf("step %v: phase = %q, jobs = %d", step["name"], phase, len(jobs.jobs))
+		}
+	}
+}
+
+func TestCancelRunningFFmpegStep(t *testing.T) {
+	step := map[string]interface{}{
+		"name": "encode",
+		"type": "ffmpeg",
+		"ffmpeg": map[string]interface{}{
+			"operation": renderer.OpNormalize,
+			"inputs":    []interface{}{"inputs/clip.mp4"},
+		},
+	}
+	run := testVideoRun([]interface{}{step})
+	run.SetUID(types.UID("12345678-1234-1234-1234-123456789abc"))
+
+	controller, jobs := testStepController(t, run, 1)
+	reconcileTimes(t, controller, 2)
+	if len(jobs.jobs) != 1 {
+		t.Fatalf("Jobs = %d, want 1", len(jobs.jobs))
+	}
+
+	requestCancellation(t, controller)
+	reconcileTimes(t, controller, 4)
+
+	got, err := controller.Runs.Get(context.Background(), "sample", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	phase, _, _ := unstructured.NestedString(got.Object, "status", "phase")
+	if phase != "Cancelled" || len(jobs.jobs) != 0 {
+		t.Fatalf("status = %v, Jobs = %d", got.Object["status"], len(jobs.jobs))
 	}
 }
