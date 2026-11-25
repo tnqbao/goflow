@@ -12,8 +12,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tnqbao/kubereel/internal/executor"
 	"github.com/tnqbao/kubereel/internal/mock"
+	"github.com/tnqbao/kubereel/internal/provider/fal"
+	"github.com/tnqbao/kubereel/internal/provider/gemini"
 	"github.com/tnqbao/kubereel/internal/renderer"
+	"github.com/tnqbao/kubereel/internal/service"
 	"github.com/tnqbao/kubereel/internal/storage"
 	"github.com/tnqbao/kubereel/internal/workflow"
 	batchv1 "k8s.io/api/batch/v1"
@@ -29,12 +33,19 @@ const maxPromptBytes = 8192
 // StepExecutor executes supported VideoRun steps using Kubernetes Jobs.
 type StepExecutor struct {
 	Runs          dynamic.ResourceInterface
+	Providers     dynamic.ResourceInterface
 	Jobs          Jobs
-	Store         *workflow.Store
+	Workflows     *service.WorkflowService
 	Config        JobConfig
 	Artifacts     storage.Store
 	MaxConcurrent int
 	JobLock       *sync.Mutex
+}
+
+type stepExecutionPlan struct {
+	payload     []byte
+	inputFile   string
+	jobOverride JobConfig
 }
 
 type executableStep struct {
@@ -42,6 +53,7 @@ type executableStep struct {
 	Type           string            `json:"type"`
 	DependsOn      []string          `json:"dependsOn"`
 	ProviderRef    string            `json:"providerRef"`
+	Model          string            `json:"model"`
 	FFmpeg         *renderer.Request `json:"ffmpeg"`
 	TimeoutSeconds int64             `json:"timeoutSeconds"`
 	Retry          struct {
@@ -86,7 +98,7 @@ func (e *StepExecutor) Reconcile(
 	runningSteps := countRunningSteps(byName)
 
 	for _, step := range steps {
-		if !isSupportedExecutableStep(step) {
+		if !e.isSupportedStep(step) {
 			continue
 		}
 
@@ -114,34 +126,49 @@ func (e *StepExecutor) Reconcile(
 			continue
 		}
 
-		payload, inputFile, invalidReason, err := prepareStepPayload(run, step, stepsByName, byName)
+		plan, blockedByProviderLimit, invalidReason, err := e.prepareStepPlan(ctx, run, step, stepsByName, byName)
 		if err != nil {
 			return err
 		}
 		if invalidReason != "" {
 			return e.setRunAndStepState(ctx, run, status, statuses, entry, "Failed", invalidReason)
 		}
+		if blockedByProviderLimit {
+			continue
+		}
 
-		return e.submitStep(ctx, run, status, statuses, step, entry, inputFile, payload)
+		return e.submitStep(ctx, run, status, statuses, step, entry, plan)
 	}
 
 	return nil
 }
 
 func (e *StepExecutor) validateConfig() error {
-	if e.Runs == nil || e.Jobs == nil || e.Store == nil || e.JobLock == nil || e.Artifacts == nil || e.MaxConcurrent < 1 {
+	if e.Runs == nil || e.Jobs == nil || e.Workflows == nil || e.JobLock == nil || e.Artifacts == nil || e.MaxConcurrent < 1 {
 		return fmt.Errorf("invalid VideoRun executor configuration")
 	}
 
 	return nil
 }
 
-func isSupportedMockImageStep(step executableStep) bool {
-	return step.Type == "image" && step.ProviderRef == "mock"
+func isSupportedProviderStepType(stepType string) bool {
+	return stepType == mock.StepLLM || stepType == mock.StepImage || stepType == mock.StepVideo
 }
 
-func isSupportedExecutableStep(step executableStep) bool {
-	return isSupportedMockImageStep(step) || step.Type == "ffmpeg"
+func isSupportedMockProviderStep(step executableStep) bool {
+	if step.ProviderRef != "mock" {
+		return false
+	}
+
+	return isSupportedProviderStepType(step.Type)
+}
+
+func (e *StepExecutor) isSupportedStep(step executableStep) bool {
+	if isSupportedMockProviderStep(step) || step.Type == "ffmpeg" {
+		return true
+	}
+
+	return e.Providers != nil && step.ProviderRef != "" && isSupportedProviderStepType(step.Type)
 }
 
 func indexExecutableSteps(steps []executableStep) map[string]executableStep {
@@ -164,30 +191,371 @@ func countRunningSteps(byName map[string]map[string]interface{}) int64 {
 	return count
 }
 
-func prepareStepPayload(
+func (e *StepExecutor) prepareStepPlan(
+	ctx context.Context,
 	run *unstructured.Unstructured,
 	step executableStep,
 	stepsByName map[string]executableStep,
 	statusesByName map[string]map[string]interface{},
-) ([]byte, string, string, error) {
+) (stepExecutionPlan, bool, string, error) {
 	if step.Type == "ffmpeg" {
-		return prepareFFmpegPayload(run.GetUID(), step, stepsByName, statusesByName)
+		payload, inputFile, invalidReason, err := prepareFFmpegPayload(run.GetUID(), step, stepsByName, statusesByName)
+		return stepExecutionPlan{payload: payload, inputFile: inputFile, jobOverride: e.Config}, false, invalidReason, err
 	}
 
 	prompt, valid, err := readMockPrompt(run)
 	if err != nil {
-		return nil, "", "", err
+		return stepExecutionPlan{}, false, "", err
 	}
 	if !valid {
-		return nil, "", "mock image requires a nonempty prompt of at most 8192 bytes", nil
+		return stepExecutionPlan{}, false, "step requires a nonempty prompt or topic of at most 8192 bytes", nil
 	}
 
-	payload, err := json.Marshal(mock.Request{Prompt: prompt})
+	if step.ProviderRef == "mock" {
+		return e.buildMockStepPlan(step, prompt)
+	}
+
+	return e.prepareExternalProviderPlan(ctx, run.GetUID(), step, prompt, stepsByName, statusesByName)
+}
+
+func (e *StepExecutor) prepareExternalProviderPlan(
+	ctx context.Context,
+	uid types.UID,
+	step executableStep,
+	prompt string,
+	stepsByName map[string]executableStep,
+	statusesByName map[string]map[string]interface{},
+) (stepExecutionPlan, bool, string, error) {
+	vp, err := e.Providers.Get(ctx, step.ProviderRef, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return stepExecutionPlan{}, false, fmt.Sprintf("VideoProvider %q not found", step.ProviderRef), nil
+	}
 	if err != nil {
-		return nil, "", "", fmt.Errorf("encode mock request: %w", err)
+		return stepExecutionPlan{}, false, "", fmt.Errorf("get VideoProvider %q: %w", step.ProviderRef, err)
 	}
 
-	return payload, "request.json", "", nil
+	enabled, configured, err := unstructured.NestedBool(vp.Object, "spec", "enabled")
+	if err != nil {
+		return stepExecutionPlan{}, false, "", err
+	}
+	if configured && !enabled {
+		return stepExecutionPlan{}, false, "provider is disabled", nil
+	}
+
+	providerType, _, err := unstructured.NestedString(vp.Object, "spec", "type")
+	if err != nil {
+		return stepExecutionPlan{}, false, "", err
+	}
+
+	switch providerType {
+	case "mock":
+		capability := step.Type
+		if capability == mock.StepLLM {
+			capability = "text"
+		}
+		capabilities, _, err := unstructured.NestedStringSlice(vp.Object, "spec", "capabilities")
+		if err != nil {
+			return stepExecutionPlan{}, false, "", err
+		}
+		if !slices.Contains(capabilities, capability) {
+			return stepExecutionPlan{}, false, "provider does not declare the required capability", nil
+		}
+		return e.buildMockStepPlan(step, prompt)
+
+	case executor.ProviderGemini:
+		if step.Type != mock.StepLLM {
+			return stepExecutionPlan{}, false, fmt.Sprintf("provider type %q is not supported for %s steps", providerType, step.Type), nil
+		}
+		return e.buildGeminiStepPlan(ctx, step, vp, prompt)
+	case executor.ProviderFal:
+		if step.Type != mock.StepImage && step.Type != mock.StepVideo {
+			return stepExecutionPlan{}, false, fmt.Sprintf("provider type %q is not supported for %s steps", providerType, step.Type), nil
+		}
+		return e.buildFalStepPlan(ctx, uid, step, vp, prompt, stepsByName, statusesByName)
+	default:
+		return stepExecutionPlan{}, false, fmt.Sprintf("provider type %q is not supported for %s steps", providerType, step.Type), nil
+	}
+}
+
+func (e *StepExecutor) buildMockStepPlan(step executableStep, prompt string) (stepExecutionPlan, bool, string, error) {
+	payload, err := json.Marshal(mock.Request{Type: step.Type, Prompt: prompt})
+	if err != nil {
+		return stepExecutionPlan{}, false, "", fmt.Errorf("encode mock request: %w", err)
+	}
+	return stepExecutionPlan{payload: payload, inputFile: "request.json", jobOverride: e.Config}, false, "", nil
+}
+
+func (e *StepExecutor) buildGeminiStepPlan(
+	ctx context.Context,
+	step executableStep,
+	vp *unstructured.Unstructured,
+	prompt string,
+) (stepExecutionPlan, bool, string, error) {
+	capabilities, _, err := unstructured.NestedStringSlice(vp.Object, "spec", "capabilities")
+	if err != nil {
+		return stepExecutionPlan{}, false, "", err
+	}
+	if !slices.Contains(capabilities, "text") {
+		return stepExecutionPlan{}, false, fmt.Sprintf("VideoProvider %q does not declare text capability", step.ProviderRef), nil
+	}
+
+	secretRef, secretReason := readProviderSecretRef(vp, step.ProviderRef)
+	if secretReason != "" {
+		return stepExecutionPlan{}, false, secretReason, nil
+	}
+
+	baseURL, _, _ := unstructured.NestedString(vp.Object, "spec", "baseURL")
+	if endpointReason := validateOptionalGeminiBaseURL(baseURL); endpointReason != "" {
+		return stepExecutionPlan{}, false, endpointReason, nil
+	}
+
+	models, _, _ := unstructured.NestedStringSlice(vp.Object, "spec", "models")
+	selectedModel, modelReason := selectProviderModel(step.Model, models, gemini.DefaultModel)
+	if modelReason != "" {
+		return stepExecutionPlan{}, false, modelReason, nil
+	}
+	if modelErr := gemini.ValidateModel(selectedModel); modelErr != nil {
+		return stepExecutionPlan{}, false, modelErr.Error(), nil
+	}
+
+	maxConc, hasMaxConc, err := unstructured.NestedInt64(vp.Object, "spec", "maxConcurrent")
+	if err != nil {
+		return stepExecutionPlan{}, false, "", err
+	}
+	atCapacity, err := e.isProviderAtCapacity(ctx, step.ProviderRef, hasMaxConc, maxConc)
+	if err != nil || atCapacity {
+		return stepExecutionPlan{}, atCapacity, "", err
+	}
+
+	vpTimeout, _, _ := unstructured.NestedInt64(vp.Object, "spec", "timeoutSeconds")
+	jobCfg := e.providerJobConfig(step, secretRef, vpTimeout)
+
+	payload, err := json.Marshal(executor.StepRequest{
+		Provider:       executor.ProviderGemini,
+		Type:           mock.StepLLM,
+		Model:          selectedModel,
+		BaseURL:        baseURL,
+		TimeoutSeconds: vpTimeout,
+		Prompt:         prompt,
+	})
+	if err != nil {
+		return stepExecutionPlan{}, false, "", fmt.Errorf("encode gemini step request: %w", err)
+	}
+
+	return stepExecutionPlan{
+		payload:     payload,
+		inputFile:   "request.json",
+		jobOverride: jobCfg,
+	}, false, "", nil
+}
+
+func (e *StepExecutor) buildFalStepPlan(
+	ctx context.Context,
+	uid types.UID,
+	step executableStep,
+	vp *unstructured.Unstructured,
+	prompt string,
+	stepsByName map[string]executableStep,
+	statusesByName map[string]map[string]interface{},
+) (stepExecutionPlan, bool, string, error) {
+	capabilities, _, err := unstructured.NestedStringSlice(vp.Object, "spec", "capabilities")
+	if err != nil {
+		return stepExecutionPlan{}, false, "", err
+	}
+	if !slices.Contains(capabilities, step.Type) {
+		return stepExecutionPlan{}, false, fmt.Sprintf("VideoProvider %q does not declare %s capability", step.ProviderRef, step.Type), nil
+	}
+
+	secretRef, secretReason := readProviderSecretRef(vp, step.ProviderRef)
+	if secretReason != "" {
+		return stepExecutionPlan{}, false, secretReason, nil
+	}
+
+	baseURL, _, _ := unstructured.NestedString(vp.Object, "spec", "baseURL")
+	if endpointReason := validateOptionalFalBaseURL(baseURL); endpointReason != "" {
+		return stepExecutionPlan{}, false, endpointReason, nil
+	}
+
+	models, _, _ := unstructured.NestedStringSlice(vp.Object, "spec", "models")
+	selectedModel, modelReason := selectProviderModel(step.Model, models, "")
+	if modelReason != "" {
+		return stepExecutionPlan{}, false, modelReason, nil
+	}
+	if modelErr := fal.ValidateModel(selectedModel); modelErr != nil {
+		return stepExecutionPlan{}, false, modelErr.Error(), nil
+	}
+
+	imageInput, depReason, err := resolveFalImageDependency(uid, step, stepsByName, statusesByName)
+	if err != nil || depReason != "" {
+		return stepExecutionPlan{}, false, depReason, err
+	}
+
+	maxConc, hasMaxConc, err := unstructured.NestedInt64(vp.Object, "spec", "maxConcurrent")
+	if err != nil {
+		return stepExecutionPlan{}, false, "", err
+	}
+	atCapacity, err := e.isProviderAtCapacity(ctx, step.ProviderRef, hasMaxConc, maxConc)
+	if err != nil || atCapacity {
+		return stepExecutionPlan{}, atCapacity, "", err
+	}
+
+	vpTimeout, _, _ := unstructured.NestedInt64(vp.Object, "spec", "timeoutSeconds")
+	jobCfg := e.providerJobConfig(step, secretRef, vpTimeout)
+
+	payload, err := json.Marshal(executor.StepRequest{
+		Provider:       executor.ProviderFal,
+		Type:           step.Type,
+		Model:          selectedModel,
+		BaseURL:        baseURL,
+		ImageInput:     imageInput,
+		TimeoutSeconds: vpTimeout,
+		Prompt:         prompt,
+	})
+	if err != nil {
+		return stepExecutionPlan{}, false, "", fmt.Errorf("encode fal step request: %w", err)
+	}
+
+	return stepExecutionPlan{
+		payload:     payload,
+		inputFile:   "request.json",
+		jobOverride: jobCfg,
+	}, false, "", nil
+}
+
+func readProviderSecretRef(vp *unstructured.Unstructured, providerRef string) (*SecretKeyRef, string) {
+	secretName, _, _ := unstructured.NestedString(vp.Object, "spec", "secretRef", "name")
+	secretKey, _, _ := unstructured.NestedString(vp.Object, "spec", "secretRef", "key")
+	if secretName == "" || secretKey == "" {
+		return nil, fmt.Sprintf("VideoProvider %q is missing secretRef", providerRef)
+	}
+
+	return &SecretKeyRef{Name: secretName, Key: secretKey}, ""
+}
+
+func (e *StepExecutor) providerJobConfig(step executableStep, secretRef *SecretKeyRef, vpTimeout int64) JobConfig {
+	jobCfg := e.Config
+	jobCfg.ProviderName = step.ProviderRef
+	jobCfg.ProviderSecret = secretRef
+	if step.TimeoutSeconds == 0 && vpTimeout > 0 {
+		jobCfg.ProviderTimeoutSeconds = vpTimeout
+	}
+
+	return jobCfg
+}
+
+func selectProviderModel(stepModel string, providerModels []string, defaultModel string) (string, string) {
+	if stepModel != "" && len(providerModels) > 0 && !slices.Contains(providerModels, stepModel) {
+		return "", fmt.Sprintf("step model %q is not listed in VideoProvider models", stepModel)
+	}
+	if stepModel != "" {
+		return stepModel, ""
+	}
+	if len(providerModels) > 0 && providerModels[0] != "" {
+		return providerModels[0], ""
+	}
+	if defaultModel != "" {
+		return defaultModel, ""
+	}
+
+	return "", "step model or VideoProvider models entry is required"
+}
+
+func resolveFalImageDependency(
+	uid types.UID,
+	step executableStep,
+	stepsByName map[string]executableStep,
+	statusesByName map[string]map[string]interface{},
+) (string, string, error) {
+	if step.Type != mock.StepVideo {
+		return "", "", nil
+	}
+
+	var imageInput string
+	for _, depName := range step.DependsOn {
+		depStep, exists := stepsByName[depName]
+		if !exists || depStep.Type != mock.StepImage {
+			continue
+		}
+		if imageInput != "" {
+			return "", "fal video step supports at most one upstream image dependency", nil
+		}
+
+		depStatus := statusesByName[depName]
+		key, reason, err := resolveCompletedRasterDependency(uid, depName, depStep, depStatus)
+		if err != nil || reason != "" {
+			return "", reason, err
+		}
+		imageInput = key
+	}
+
+	return imageInput, "", nil
+}
+
+func resolveCompletedRasterDependency(
+	uid types.UID,
+	depName string,
+	depStep executableStep,
+	depStatus map[string]interface{},
+) (string, string, error) {
+	if depStatus == nil || depStatus["phase"] != "Succeeded" {
+		return "", fmt.Sprintf("dependency step %q is not completed", depName), nil
+	}
+	if !hasRecordedExternalProvider(depStatus) {
+		return "", "fal video step requires a raster image dependency; mock image steps output SVG", nil
+	}
+
+	attempt, err := stepAttempt(depStatus)
+	if err != nil {
+		return "", "", err
+	}
+	if attempt < 1 {
+		return "", fmt.Sprintf("dependency step %q has no recorded output", depName), nil
+	}
+
+	depWorkflowID := workflow.StepWorkID(string(uid), depStep.Name, attempt)
+	return stepOutputArtifactKey(depStep, depWorkflowID, true), "", nil
+}
+
+func hasRecordedExternalProvider(stepEntry map[string]interface{}) bool {
+	providerName, _, err := unstructured.NestedString(stepEntry, "jobConfig", "providerName")
+	return err == nil && providerName != ""
+}
+
+func validateOptionalGeminiBaseURL(baseURL string) string {
+	if baseURL == "" {
+		return ""
+	}
+
+	if err := gemini.ValidateEndpoint(baseURL); err != nil {
+		return err.Error()
+	}
+
+	return ""
+}
+
+func validateOptionalFalBaseURL(baseURL string) string {
+	if baseURL == "" {
+		return ""
+	}
+
+	if err := fal.ValidateEndpoint(baseURL); err != nil {
+		return err.Error()
+	}
+
+	return ""
+}
+
+func (e *StepExecutor) isProviderAtCapacity(ctx context.Context, providerName string, hasMax bool, maxConc int64) (bool, error) {
+	if !hasMax || maxConc <= 0 {
+		return false, nil
+	}
+
+	activeCount, err := countActiveProviderJobs(ctx, e.Jobs, e.Config.Instance, providerName)
+	if err != nil {
+		return false, err
+	}
+
+	return int64(activeCount) >= maxConc, nil
 }
 
 func prepareFFmpegPayload(
@@ -206,7 +574,7 @@ func prepareFFmpegPayload(
 	req := *step.FFmpeg
 	rawInputs := req.Inputs
 	if len(rawInputs) == 0 && len(step.DependsOn) > 0 {
-		rawInputs = step.DependsOn
+		rawInputs = defaultFFmpegDependencies(step.DependsOn, stepsByName)
 	}
 
 	resolvedInputs, invalidReason, err := resolveFFmpegInputs(uid, step, rawInputs, stepsByName, statusesByName)
@@ -279,8 +647,24 @@ func resolveFFmpegReference(
 		return "", fmt.Sprintf("dependency step %q has no recorded output", ref), nil
 	}
 
-	depWorkflowID := deterministicStepID(uid, depStep.Name, attempt)
-	return stepOutputArtifactKey(depStep, depWorkflowID), "", nil
+	depWorkflowID := workflow.StepWorkID(string(uid), depStep.Name, attempt)
+	return stepOutputArtifactKey(depStep, depWorkflowID, hasRecordedExternalProvider(depStatus)), "", nil
+}
+
+func defaultFFmpegDependencies(dependsOn []string, stepsByName map[string]executableStep) []string {
+	mediaDeps := make([]string, 0, len(dependsOn))
+	for _, depName := range dependsOn {
+		dep := stepsByName[depName]
+		if dep.Type == mock.StepVideo || dep.Type == "ffmpeg" {
+			mediaDeps = append(mediaDeps, depName)
+		}
+	}
+
+	if len(mediaDeps) > 0 {
+		return mediaDeps
+	}
+
+	return dependsOn
 }
 
 func readMockPrompt(run *unstructured.Unstructured) (string, bool, error) {
@@ -288,13 +672,37 @@ func readMockPrompt(run *unstructured.Unstructured) (string, bool, error) {
 	if err != nil {
 		return "", false, fmt.Errorf("read mock prompt: %w", err)
 	}
+	if found {
+		trimmed := strings.TrimSpace(prompt)
+		return prompt, trimmed != "" && len(trimmed) <= maxPromptBytes, nil
+	}
 
-	trimmed := strings.TrimSpace(prompt)
-	if !found || trimmed == "" || len(trimmed) > maxPromptBytes {
+	topic, hasTopic, err := unstructured.NestedString(run.Object, "spec", "inputs", "topic", "stringValue")
+	if err != nil {
+		return "", false, fmt.Errorf("read workflow topic: %w", err)
+	}
+	if !hasTopic {
 		return "", false, nil
 	}
 
-	return prompt, true, nil
+	combined := strings.TrimSpace(topic)
+	if combined == "" {
+		return "", false, nil
+	}
+
+	style, hasStyle, err := unstructured.NestedString(run.Object, "spec", "inputs", "style", "stringValue")
+	if err != nil {
+		return "", false, fmt.Errorf("read workflow style: %w", err)
+	}
+	if hasStyle && strings.TrimSpace(style) != "" {
+		combined = combined + " (" + strings.TrimSpace(style) + ")"
+	}
+
+	if len(combined) > maxPromptBytes {
+		return "", false, nil
+	}
+
+	return combined, true, nil
 }
 
 func executableSteps(run *unstructured.Unstructured) ([]executableStep, error) {
@@ -352,8 +760,7 @@ func (e *StepExecutor) submitStep(
 	statuses []interface{},
 	step executableStep,
 	entry map[string]interface{},
-	inputFile string,
-	payload []byte,
+	plan stepExecutionPlan,
 ) error {
 	available, err := e.hasAvailableJobSlot(ctx)
 	if err != nil || !available {
@@ -373,7 +780,7 @@ func (e *StepExecutor) submitStep(
 		return e.setRunAndStepState(ctx, run, status, statuses, entry, "RequiresReview", "retry has no recorded Job configuration")
 	}
 
-	jobCfg, err := recordedJobConfig(entry, e.Config)
+	jobCfg, err := recordedJobConfig(entry, plan.jobOverride)
 	if err != nil {
 		return e.setRunAndStepState(ctx, run, status, statuses, entry, "RequiresReview", "recorded Job configuration is invalid")
 	}
@@ -395,7 +802,7 @@ func (e *StepExecutor) submitStep(
 	}
 
 	workflowID := job.Labels["kubereel.io/workflow"]
-	if err := publishStepPayload(ctx, e.Artifacts, workflowID, inputFile, payload); err != nil {
+	if err := publishStepPayload(ctx, e.Artifacts, workflowID, plan.inputFile, plan.payload); err != nil {
 		return fmt.Errorf("write step request: %w", err)
 	}
 
@@ -421,7 +828,7 @@ func publishStepPayload(ctx context.Context, artifacts storage.Store, workflowID
 }
 
 func (e *StepExecutor) hasAvailableJobSlot(ctx context.Context) (bool, error) {
-	activeWorkflows, err := e.Store.Active(ctx)
+	activeWorkflows, err := e.Workflows.Active(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -501,6 +908,14 @@ func (e *StepExecutor) observeRunningStep(
 
 	if hasJobCondition(actualJob, batchv1.JobFailed) {
 		entry["jobConfig"] = jobConfigStatus(jobCfg, expectedJob)
+		workflowID := expectedJob.Labels["kubereel.io/workflow"]
+		uncertain, uncertainErr := executor.HasUncertainOutcome(ctx, e.Artifacts, workflowID)
+		if uncertainErr != nil {
+			return false, uncertainErr
+		}
+		if uncertain {
+			return true, e.setRunAndStepState(ctx, run, status, statuses, entry, "RequiresReview", "provider submission outcome is uncertain")
+		}
 		return true, e.retryOrFailStep(ctx, run, status, statuses, step, entry, attempt)
 	}
 
@@ -522,7 +937,7 @@ func (e *StepExecutor) recordStepSuccess(
 	finishRun bool,
 ) error {
 	workflowID := job.Labels["kubereel.io/workflow"]
-	artifactKey := stepOutputArtifactKey(step, workflowID)
+	artifactKey := stepOutputArtifactKey(step, workflowID, job.Labels["kubereel.io/provider"] != "")
 
 	err := validateStepArtifact(ctx, e.Artifacts, step, artifactKey)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -555,11 +970,14 @@ func (e *StepExecutor) recordStepSuccess(
 }
 
 func validateStepArtifact(ctx context.Context, artifacts storage.Store, step executableStep, artifactKey string) error {
-	if step.Type == "ffmpeg" {
+	switch step.Type {
+	case mock.StepLLM:
+		return mock.ValidateScript(ctx, artifacts, artifactKey)
+	case mock.StepVideo, "ffmpeg":
 		return renderer.ValidateMP4(ctx, artifacts, artifactKey)
+	default:
+		return executor.ValidateImageArtifact(ctx, artifacts, artifactKey)
 	}
-
-	return mock.ValidateSVG(ctx, artifacts, artifactKey)
 }
 
 func appendRunArtifact(status map[string]interface{}, artifactPath string) error {

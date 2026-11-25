@@ -11,20 +11,23 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
+	"github.com/labstack/echo/v4"
 	"github.com/tnqbao/kubereel/internal/api"
+	"github.com/tnqbao/kubereel/internal/api/controller"
+	"github.com/tnqbao/kubereel/internal/api/middleware"
 	"github.com/tnqbao/kubereel/internal/config"
 	"github.com/tnqbao/kubereel/internal/database"
+	"github.com/tnqbao/kubereel/internal/executor"
 	"github.com/tnqbao/kubereel/internal/kubernetes"
-	"github.com/tnqbao/kubereel/internal/mock"
 	"github.com/tnqbao/kubereel/internal/provider"
 	"github.com/tnqbao/kubereel/internal/renderer"
+	"github.com/tnqbao/kubereel/internal/repository"
+	"github.com/tnqbao/kubereel/internal/service"
 	"github.com/tnqbao/kubereel/internal/storage"
 	"github.com/tnqbao/kubereel/internal/web"
-	"github.com/tnqbao/kubereel/internal/workflow"
 )
 
 const (
@@ -106,18 +109,10 @@ func runTask(ctx context.Context, command, inputPath, outputPath string, cfg con
 	}
 
 	if command == kubernetes.StageWorker {
-		return mock.Generate(ctx, artifacts, inputKey, outputKey)
-	}
-
-	if isLegacySVGRender(inputKey, outputKey) {
-		return mock.Render(ctx, artifacts, inputKey, outputKey)
+		return executor.Execute(ctx, artifacts, inputKey, outputKey)
 	}
 
 	return renderer.New().RenderFile(ctx, artifacts, inputKey, outputKey)
-}
-
-func isLegacySVGRender(inputKey, outputKey string) bool {
-	return strings.HasSuffix(inputKey, ".svg") && strings.HasSuffix(outputKey, ".svg")
 }
 
 func runServer(ctx context.Context, cfg config.Config) (runErr error) {
@@ -137,24 +132,35 @@ func runServer(ctx context.Context, cfg config.Config) (runErr error) {
 		runErr = errors.Join(runErr, artifacts.Close())
 	}()
 
-	store := workflow.NewStore(db)
-	controller, err := kubernetes.NewControllerFromCluster(ctx, cfg, store, artifacts)
+	authSvc := service.NewAuthService(repository.NewAuthRepository(db), cfg.Auth)
+	if err := authSvc.Bootstrap(ctx); err != nil {
+		return fmt.Errorf("bootstrap authentication: %w", err)
+	}
+
+	providerSvc := service.NewProviderService(provider.NewManager())
+	workflowRepo := repository.NewWorkflowRepository(db)
+	workflowSvc := service.NewWorkflowService(workflowRepo, artifacts, providerSvc)
+
+	operator, err := kubernetes.NewControllerFromCluster(ctx, cfg, workflowSvc, artifacts)
 	if err != nil {
 		return err
 	}
 
-	mux := newBaseMux(db)
-	if controller != nil {
-		registerClusterRoutes(mux, store, artifacts)
-		stopController := startBackgroundController(ctx, controller)
-		defer stopController()
+	router := newBaseEcho(db)
+	(web.AuthController{Service: authSvc}).Register(router)
+	if operator != nil {
+		registerClusterControllers(router, authSvc, workflowSvc, providerSvc, service.NewProviderManagement(operator.ProviderRepository), service.NewWorkflowDefinitions(operator.WorkflowDefinitions),
+			service.NewExecutions(operator.ExecutionRepository, operator.WorkflowDefinitions),
+			service.NewArtifacts(operator.ExecutionRepository, artifacts), operator.Schedules)
+		stopOperator := startBackgroundController(ctx, operator)
+		defer stopOperator()
 	} else {
-		registerStandaloneFallback(mux)
+		registerStandaloneControllers(router, authSvc)
 	}
 
 	server := &http.Server{
 		Addr:              cfg.Address,
-		Handler:           mux,
+		Handler:           router,
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
@@ -162,29 +168,48 @@ func runServer(ctx context.Context, cfg config.Config) (runErr error) {
 	return serveHTTP(ctx, server, shutdownTimeout)
 }
 
-func registerClusterRoutes(mux *http.ServeMux, store *workflow.Store, artifacts storage.Store) {
-	(api.Handler{
-		Workflows: store,
-		Artifacts: artifacts,
-		Providers: provider.NewManager(),
-	}).Register(mux)
+func registerClusterControllers(
+	e *echo.Echo,
+	auth *service.AuthService,
+	workflows *service.WorkflowService,
+	providers *service.ProviderService,
+	management *service.ProviderManagement,
+	definitions *service.WorkflowDefinitions,
+	executions *service.Executions,
+	artifacts *service.Artifacts,
+	schedules *service.Schedules,
+) {
+	(api.Router{
+		Auth:                auth,
+		Workflows:           workflows,
+		Providers:           providers,
+		ProviderManagement:  management,
+		WorkflowDefinitions: definitions,
+		Executions:          executions,
+		Artifacts:           artifacts,
+		Schedules:           schedules,
+	}).Register(e)
 
-	(web.WorkflowHandler{Store: store}).Register(mux)
+	(web.WorkflowController{
+		Auth:    auth,
+		Service: workflows,
+	}).Register(e)
 }
 
-func registerStandaloneFallback(mux *http.ServeMux) {
-	mux.HandleFunc("GET /workflows", func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "Mock workflows require Kubernetes mode", http.StatusServiceUnavailable)
-	})
+func registerStandaloneControllers(e *echo.Echo, auth *service.AuthService) {
+	(controller.AuthController{Service: auth}).Register(e)
+	e.GET("/workflows", func(c echo.Context) error {
+		return c.String(http.StatusServiceUnavailable, "Mock workflows require Kubernetes mode\n")
+	}, web.RequireWebAuth(auth))
 }
 
-func startBackgroundController(ctx context.Context, controller *kubernetes.Controller) func() {
+func startBackgroundController(ctx context.Context, operator *kubernetes.Controller) func() {
 	controllerCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 
 	go func() {
 		defer close(done)
-		controller.Run(controllerCtx)
+		operator.Run(controllerCtx)
 	}()
 
 	return func() {
@@ -247,31 +272,12 @@ func openDatabase(ctx context.Context, cfg config.Config) (*sql.DB, error) {
 	return db, nil
 }
 
-func newBaseMux(db *sql.DB) *http.ServeMux {
-	mux := http.NewServeMux()
+func newBaseEcho(db *sql.DB) *echo.Echo {
+	e := echo.New()
+	e.HideBanner = true
+	e.HidePort = true
+	e.Use(middleware.SecurityHeaders())
 
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/workflows", http.StatusSeeOther)
-	})
-
-	mux.Handle("GET /static/", web.Assets())
-	mux.HandleFunc("GET /healthz", handleHealth)
-	mux.HandleFunc("GET /readyz", handleReadiness(db))
-
-	return mux
-}
-
-func handleHealth(w http.ResponseWriter, _ *http.Request) {
-	w.WriteHeader(http.StatusOK)
-}
-
-func handleReadiness(db *sql.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if err := db.PingContext(r.Context()); err != nil {
-			http.Error(w, "not ready", http.StatusServiceUnavailable)
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-	}
+	(controller.SystemController{DB: db}).Register(e)
+	return e
 }

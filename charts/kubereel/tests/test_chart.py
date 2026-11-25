@@ -67,7 +67,7 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(version["name"], "v1alpha1")
         self.assertTrue(version["served"] and version["storage"])
         spec = version["schema"]["openAPIV3Schema"]["properties"]["spec"]
-        self.assertEqual(set(spec["properties"]), {"type", "capabilities", "models", "baseURL", "secretRef", "maxConcurrent", "timeoutSeconds"})
+        self.assertEqual(set(spec["properties"]), {"type", "enabled", "capabilities", "models", "baseURL", "secretRef", "maxConcurrent", "timeoutSeconds"})
         self.assertEqual(set(spec["properties"]["secretRef"]["required"]), {"name", "key"})
 
     def test_defaults(self):
@@ -83,13 +83,18 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(env["EXECUTION_MODE"], "kubernetes")
         self.assertEqual(env["MAX_CONCURRENT_JOBS"], "5")
         self.assertEqual(env["JOB_TTL_SECONDS"], "86400")
+        self.assertEqual(env["AUTH_SESSION_TTL_SECONDS"], "86400")
+        self.assertNotIn("AUTH_BOOTSTRAP_PASSWORD", env)
         self.assertEqual(container["image"], "iamqbao/kubereel:0.1.0")
         self.assertEqual(env["JOB_IMAGE"], container["image"])
         self.assertEqual(env["SHARED_STORAGE"], "false")
         self.assertEqual(env["PVC_NAME"], docs["PersistentVolumeClaim"]["metadata"]["name"])
         self.assertEqual(env["INSTANCE_NAME"], "test")
         self.assertEqual(docs["Role"]["rules"][0]["verbs"], ["get", "list", "watch", "create", "delete"])
-        self.assertIn({"apiGroups": ["kubereel.io"], "resources": ["videoruns"], "verbs": ["get", "list", "watch"]}, docs["Role"]["rules"])
+        self.assertIn({"apiGroups": ["kubereel.io"], "resources": ["videoruns", "videoproviders"], "verbs": ["get", "list", "watch"]}, docs["Role"]["rules"])
+        self.assertIn({"apiGroups": ["kubereel.io"], "resources": ["videoworkflows"], "verbs": ["get", "list", "create", "update", "delete"]}, docs["Role"]["rules"])
+        self.assertIn({"apiGroups": ["kubereel.io"], "resources": ["videoruns"], "verbs": ["create", "update"]}, docs["Role"]["rules"])
+        self.assertIn({"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]}, docs["Role"]["rules"])
         self.assertIn({"apiGroups": ["kubereel.io"], "resources": ["videoruns/status"], "verbs": ["update"]}, docs["Role"]["rules"])
         self.assertEqual(container["livenessProbe"]["httpGet"]["path"], "/healthz")
         self.assertEqual(container["readinessProbe"]["httpGet"]["path"], "/readyz")
@@ -140,8 +145,28 @@ class ChartTest(unittest.TestCase):
         result = subprocess.run(["helm", "template", "test", str(CHART), "--set", "storage.accessMode=ReadOnlyMany"], text=True, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
 
+    def test_auth_existing_secret_binding(self):
+        docs = render(
+            "--set", "auth.existingSecret=admin-bootstrap",
+            "--set", "auth.username=ops-admin",
+            "--set", "auth.passwordKey=admin-pass",
+            "--set", "auth.setupTokenKey=setup-tok",
+            "--set", "auth.sessionTTLSeconds=7200",
+        )
+        env_items = {item["name"]: item for item in docs["Deployment"]["spec"]["template"]["spec"]["containers"][0]["env"]}
+        self.assertEqual(env_items["AUTH_SESSION_TTL_SECONDS"]["value"], "7200")
+        self.assertEqual(env_items["AUTH_BOOTSTRAP_USERNAME"]["value"], "ops-admin")
+        self.assertEqual(
+            env_items["AUTH_BOOTSTRAP_PASSWORD"]["valueFrom"]["secretKeyRef"],
+            {"name": "admin-bootstrap", "key": "admin-pass"},
+        )
+        self.assertEqual(
+            env_items["AUTH_SETUP_TOKEN"]["valueFrom"]["secretKeyRef"],
+            {"name": "admin-bootstrap", "key": "setup-tok"},
+        )
+
     def test_unsupported_settings_are_rejected(self):
-        for value in ("replicaCount=2", "execution.mode=embedded", "execution.maxConcurrentJobs=0", "storage.type=s3", "providers.mock.enabled=false", "service.type=LoadBalancer", "image.tag=latest", "persistence.existingClaim=old-claim", "workflow.maxConcurrent=4"):
+        for value in ("replicaCount=2", "execution.mode=embedded", "execution.maxConcurrentJobs=0", "auth.sessionTTLSeconds=10", "storage.type=s3", "providers.mock.enabled=false", "service.type=LoadBalancer", "image.tag=latest", "persistence.existingClaim=old-claim", "workflow.maxConcurrent=4"):
             with self.subTest(value=value):
                 result = subprocess.run(["helm", "template", "test", str(CHART), "--set", value], text=True, capture_output=True)
                 self.assertNotEqual(result.returncode, 0)

@@ -23,17 +23,31 @@ const (
 	EnvSharedStorage            = "SHARED_STORAGE"
 	EnvMaxConcurrentJobs        = "MAX_CONCURRENT_JOBS"
 	EnvJobTTLSeconds            = "JOB_TTL_SECONDS"
+	EnvAuthSessionTTLSeconds    = "AUTH_SESSION_TTL_SECONDS"
+	EnvAuthBootstrapUsername    = "AUTH_BOOTSTRAP_USERNAME"
+	EnvAuthBootstrapPassword    = "AUTH_BOOTSTRAP_PASSWORD"
+	EnvAuthSetupToken           = "AUTH_SETUP_TOKEN"
 )
 
 const (
-	defaultAddress          = ":8080"
-	defaultDatabasePath     = "/data/kubereel.db"
-	defaultArtifactMaxBytes = 1 << 30
+	defaultAddress           = ":8080"
+	defaultDatabasePath      = "/data/kubereel.db"
+	defaultArtifactMaxBytes  = 1 << 30
+	defaultSessionTTLSeconds = 86400
+	maxSessionTTLSeconds     = 31536000
 
 	// MaxArtifactBytesLimit caps artifact sizes to the largest exact IEEE-754 integer
 	// so values survive unstructured Kubernetes JSON round-trips without precision loss.
 	MaxArtifactBytesLimit int64 = 9007199254740991
 )
+
+// AuthConfig holds optional bootstrap credentials and session settings.
+type AuthConfig struct {
+	SessionTTL        time.Duration
+	BootstrapUsername string
+	BootstrapPassword string
+	SetupToken        string
+}
 
 // Config holds the application settings across standalone and Kubernetes modes.
 type Config struct {
@@ -41,6 +55,7 @@ type Config struct {
 	Database          string
 	ArtifactMaxBytes  int64
 	ArtifactRetention time.Duration
+	Auth              AuthConfig
 	Kubernetes        KubernetesConfig
 }
 
@@ -50,6 +65,9 @@ func Defaults() Config {
 		Address:          defaultAddress,
 		Database:         defaultDatabasePath,
 		ArtifactMaxBytes: defaultArtifactMaxBytes,
+		Auth: AuthConfig{
+			SessionTTL: defaultSessionTTLSeconds * time.Second,
+		},
 	}
 }
 
@@ -79,7 +97,36 @@ func Load() (Config, error) {
 	}
 	cfg.Kubernetes = k8sCfg
 
+	authCfg, err := loadAuthConfig(cfg.Auth)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Auth = authCfg
+
 	return cfg, nil
+}
+
+func loadAuthConfig(defaults AuthConfig) (AuthConfig, error) {
+	ttlSeconds, err := parseNonNegativeInt64(EnvAuthSessionTTLSeconds, int64(defaults.SessionTTL/time.Second))
+	if err != nil {
+		return AuthConfig{}, err
+	}
+	if ttlSeconds < 60 || ttlSeconds > maxSessionTTLSeconds {
+		return AuthConfig{}, fmt.Errorf("%s must be between 60 and %d", EnvAuthSessionTTLSeconds, maxSessionTTLSeconds)
+	}
+
+	username := os.Getenv(EnvAuthBootstrapUsername)
+	password := os.Getenv(EnvAuthBootstrapPassword)
+	if password != "" && username == "" {
+		username = "admin"
+	}
+
+	return AuthConfig{
+		SessionTTL:        time.Duration(ttlSeconds) * time.Second,
+		BootstrapUsername: username,
+		BootstrapPassword: password,
+		SetupToken:        os.Getenv(EnvAuthSetupToken),
+	}, nil
 }
 
 func loadArtifactMaxBytes(fallback int64) (int64, error) {

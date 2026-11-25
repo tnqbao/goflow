@@ -12,12 +12,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tnqbao/kubereel/internal/executor"
 	"github.com/tnqbao/kubereel/internal/mock"
 	"github.com/tnqbao/kubereel/internal/renderer"
 	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic/fake"
 )
 
 func mockRun(names ...string) *unstructured.Unstructured {
@@ -35,7 +38,7 @@ func testStepController(t *testing.T, run *unstructured.Unstructured, maximum in
 	t.Helper()
 	legacy, jobs := testController(t)
 	controller, _ := testRunController(run)
-	controller.Executor = &StepExecutor{Runs: controller.Runs, Jobs: jobs, Store: legacy.Store, Config: legacy.Config, Artifacts: legacy.Artifacts, MaxConcurrent: maximum, JobLock: &sync.Mutex{}}
+	controller.Executor = &StepExecutor{Runs: controller.Runs, Jobs: jobs, Workflows: legacy.Workflows, Config: legacy.Config, Artifacts: legacy.Artifacts, MaxConcurrent: maximum, JobLock: &sync.Mutex{}}
 	return controller, jobs
 }
 
@@ -125,11 +128,11 @@ func TestStepExecutorParallelAndLimit(t *testing.T) {
 func TestStepExecutorAccountsForLegacyWork(t *testing.T) {
 	ctx := context.Background()
 	controller, jobs := testStepController(t, mockRun("image"), 1)
-	legacy, err := controller.Executor.Store.Create(ctx, "legacy")
+	legacy, err := controller.Executor.Workflows.Create(ctx, "legacy", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := controller.Executor.Store.Transition(ctx, legacy.ID, "queued", "running", "", ""); err != nil {
+	if err := controller.Executor.Workflows.Transition(ctx, legacy.ID, "queued", "running", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
@@ -271,14 +274,14 @@ func TestLegacyControllerAccountsForVideoRunJobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	jobs.jobs[job.Name] = job
-	legacy, err := controller.Store.Create(ctx, "legacy")
+	legacy, err := controller.Workflows.Create(ctx, "legacy", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := controller.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, err := controller.Store.Get(ctx, legacy.ID)
+	got, err := controller.Workflows.Get(ctx, legacy.ID)
 	if err != nil || got.Status != "queued" {
 		t.Fatalf("legacy workflow = %+v, error = %v", got, err)
 	}
@@ -290,8 +293,8 @@ func TestSharedJobLimitDuringConcurrentReconciliation(t *testing.T) {
 	lock := &sync.Mutex{}
 	legacy.JobLock = lock
 	runs, _ := testRunController(mockRun("image"))
-	runs.Executor = &StepExecutor{Runs: runs.Runs, Jobs: jobs, Store: legacy.Store, Config: legacy.Config, Artifacts: legacy.Artifacts, MaxConcurrent: 1, JobLock: lock}
-	if _, err := legacy.Store.Create(ctx, "legacy"); err != nil {
+	runs.Executor = &StepExecutor{Runs: runs.Runs, Jobs: jobs, Workflows: legacy.Workflows, Config: legacy.Config, Artifacts: legacy.Artifacts, MaxConcurrent: 1, JobLock: lock}
+	if _, err := legacy.Workflows.Create(ctx, "legacy", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := runs.Reconcile(ctx, "sample"); err != nil {
@@ -502,5 +505,431 @@ func TestCancelRunningFFmpegStep(t *testing.T) {
 	phase, _, _ := unstructured.NestedString(got.Object, "status", "phase")
 	if phase != "Cancelled" || len(jobs.jobs) != 0 {
 		t.Fatalf("status = %v, Jobs = %d", got.Object["status"], len(jobs.jobs))
+	}
+}
+
+func TestStepExecutorEndToEndMockWorkflowDAG(t *testing.T) {
+	ctx := context.Background()
+	steps := []interface{}{
+		map[string]interface{}{"name": "script", "type": "llm", "providerRef": "mock"},
+		map[string]interface{}{"name": "image-1", "type": "image", "providerRef": "mock", "dependsOn": []interface{}{"script"}},
+		map[string]interface{}{"name": "image-2", "type": "image", "providerRef": "mock", "dependsOn": []interface{}{"script"}},
+		map[string]interface{}{"name": "video-1", "type": "video", "providerRef": "mock", "dependsOn": []interface{}{"image-1"}},
+		map[string]interface{}{"name": "video-2", "type": "video", "providerRef": "mock", "dependsOn": []interface{}{"image-2"}},
+		map[string]interface{}{
+			"name":      "render",
+			"type":      "ffmpeg",
+			"dependsOn": []interface{}{"video-1", "video-2"},
+			"ffmpeg": map[string]interface{}{
+				"operation":   renderer.OpRenderMP4,
+				"aspectRatio": "9:16",
+			},
+		},
+	}
+
+	run := testVideoRun(steps)
+	run.SetUID(types.UID("abcdef01-2345-6789-abcd-ef0123456789"))
+	spec := run.Object["spec"].(map[string]interface{})
+	spec["inputs"] = map[string]interface{}{
+		"topic": map[string]interface{}{"stringValue": "Unknown creatures in the forest"},
+		"style": map[string]interface{}{"stringValue": "Found footage horror"},
+	}
+	spec["workflowSnapshot"].(map[string]interface{})["outputs"] = []interface{}{
+		map[string]interface{}{"name": "final-video", "from": "render"},
+	}
+
+	controller, jobs := testStepController(t, run, 4)
+
+	// 1. Submit and execute the Mock LLM script step.
+	reconcileTimes(t, controller, 2)
+	if len(jobs.jobs) != 1 {
+		t.Fatalf("Jobs after script submit = %d, want 1", len(jobs.jobs))
+	}
+	for _, job := range jobs.jobs {
+		id := job.Labels["kubereel.io/workflow"]
+		dir := filepath.ToSlash(filepath.Join("workflows", id))
+		if err := mock.Execute(ctx, controller.Executor.Artifacts, dir+"/request.json", dir+"/script.json"); err != nil {
+			t.Fatal(err)
+		}
+		jobs.finish(id, StageWorker, batchv1.JobComplete)
+	}
+
+	// 2. Both independent Mock image steps become ready and submit concurrently.
+	reconcileTimes(t, controller, 5)
+	activeImageJobs := 0
+	for _, job := range jobs.jobs {
+		if !isJobTerminal(job) {
+			activeImageJobs++
+			id := job.Labels["kubereel.io/workflow"]
+			dir := filepath.ToSlash(filepath.Join("workflows", id))
+			if err := mock.Execute(ctx, controller.Executor.Artifacts, dir+"/request.json", dir+"/scene.svg"); err != nil {
+				t.Fatal(err)
+			}
+			jobs.finish(id, StageWorker, batchv1.JobComplete)
+		}
+	}
+	if activeImageJobs != 2 {
+		t.Fatalf("concurrent image Jobs = %d, want 2", activeImageJobs)
+	}
+
+	// 3. Both independent Mock video steps become ready and submit concurrently.
+	reconcileTimes(t, controller, 6)
+	activeVideoJobs := 0
+	for _, job := range jobs.jobs {
+		if !isJobTerminal(job) {
+			activeVideoJobs++
+			id := job.Labels["kubereel.io/workflow"]
+			dir := filepath.ToSlash(filepath.Join("workflows", id))
+			if err := controller.Executor.Artifacts.Put(ctx, dir+"/clip.mp4", bytes.NewReader(testValidMP4())); err != nil {
+				t.Fatal(err)
+			}
+			jobs.finish(id, StageWorker, batchv1.JobComplete)
+		}
+	}
+	if activeVideoJobs != 2 {
+		t.Fatalf("concurrent video Jobs = %d, want 2", activeVideoJobs)
+	}
+
+	// 4. Final FFmpeg render step resolves both upstream video clips and completes the run.
+	reconcileTimes(t, controller, 5)
+	var renderJob *batchv1.Job
+	for _, job := range jobs.jobs {
+		if !isJobTerminal(job) {
+			renderJob = job
+		}
+	}
+	if renderJob == nil || renderJob.Labels["kubereel.io/stage"] != StageRender {
+		t.Fatalf("expected active render Job, got %+v", renderJob)
+	}
+
+	renderID := renderJob.Labels["kubereel.io/workflow"]
+	renderDir := filepath.ToSlash(filepath.Join("workflows", renderID))
+	specObj, err := controller.Executor.Artifacts.Open(ctx, renderDir+"/render.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawSpec, err := io.ReadAll(specObj)
+	_ = specObj.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resolved renderer.Request
+	if err := json.Unmarshal(rawSpec, &resolved); err != nil {
+		t.Fatal(err)
+	}
+	if len(resolved.Inputs) != 2 || resolved.AspectRatio != "9:16" {
+		t.Fatalf("resolved FFmpeg request = %+v", resolved)
+	}
+
+	if err := controller.Executor.Artifacts.Put(ctx, renderDir+"/output.mp4", bytes.NewReader(testValidMP4())); err != nil {
+		t.Fatal(err)
+	}
+	jobs.finish(renderID, StageRender, batchv1.JobComplete)
+	reconcileTimes(t, controller, 1)
+
+	got, err := controller.Runs.Get(ctx, "sample", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	phase, _, _ := unstructured.NestedString(got.Object, "status", "phase")
+	artifacts, _, _ := unstructured.NestedStringSlice(got.Object, "status", "artifacts")
+	if phase != "Succeeded" || len(artifacts) != 6 {
+		t.Fatalf("final status = %v", got.Object["status"])
+	}
+	if err := controller.Executor.cleanupArtifacts(ctx, got, time.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("cleanupArtifacts = %v", err)
+	}
+}
+
+func TestStepExecutorGeminiProviderSecretLimitAndUncertainOutcome(t *testing.T) {
+	ctx := context.Background()
+	steps := []interface{}{
+		map[string]interface{}{
+			"name":        "first-idea",
+			"type":        "llm",
+			"providerRef": "gemini-main",
+		},
+		map[string]interface{}{
+			"name":        "second-idea",
+			"type":        "llm",
+			"providerRef": "gemini-main",
+			"retry":       map[string]interface{}{"maxAttempts": int64(3)},
+		},
+	}
+	run := testVideoRun(steps)
+	run.SetUID(types.UID("11112222-3333-4444-5555-666677778888"))
+	run.Object["spec"].(map[string]interface{})["inputs"] = map[string]interface{}{
+		"prompt": map[string]interface{}{"stringValue": "Write a sci-fi teaser script"},
+	}
+
+	vp := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "kubereel.io/v1alpha1",
+		"kind":       "VideoProvider",
+		"metadata":   map[string]interface{}{"name": "gemini-main", "namespace": "test"},
+		"spec": map[string]interface{}{
+			"type":           "gemini",
+			"capabilities":   []interface{}{"text"},
+			"models":         []interface{}{"gemini-4-hydrogen"},
+			"secretRef":      map[string]interface{}{"name": "gemini-creds", "key": "api-key"},
+			"maxConcurrent":  int64(1),
+			"timeoutSeconds": int64(45),
+		},
+	}}
+
+	dynClient := fake.NewSimpleDynamicClient(runtime.NewScheme(), run, vp)
+	controller, jobs := testStepController(t, run, 4)
+	controller.Runs = dynClient.Resource(VideoRunResource()).Namespace("test")
+	controller.Executor.Runs = controller.Runs
+	controller.Executor.Providers = dynClient.Resource(VideoProviderResource()).Namespace("test")
+
+	reconcileTimes(t, controller, 4)
+	if len(jobs.jobs) != 1 {
+		t.Fatalf("Jobs = %d, want 1 due to VideoProvider maxConcurrent=1", len(jobs.jobs))
+	}
+
+	var firstJob *batchv1.Job
+	for _, firstJob = range jobs.jobs {
+	}
+	if firstJob.Labels["kubereel.io/provider"] != "gemini-main" || *firstJob.Spec.ActiveDeadlineSeconds != 45 {
+		t.Fatalf("unexpected Gemini Job spec: %+v", firstJob)
+	}
+
+	env := firstJob.Spec.Template.Spec.Containers[0].Env
+	if len(env) != 1 || env[0].Name != executor.EnvProviderAPIKey || env[0].ValueFrom == nil ||
+		env[0].ValueFrom.SecretKeyRef.Name != "gemini-creds" || env[0].ValueFrom.SecretKeyRef.Key != "api-key" {
+		t.Fatalf("expected SecretKeyRef env injection, got %+v", env)
+	}
+
+	firstID := firstJob.Labels["kubereel.io/workflow"]
+	firstDir := filepath.ToSlash(filepath.Join("workflows", firstID))
+	scriptPayload := `{"prompt":"Write a sci-fi teaser script","script":"Scene 1: Orbit","scenes":["Scene 1: Orbit"]}`
+	if err := controller.Executor.Artifacts.Put(ctx, firstDir+"/script.json", bytes.NewReader([]byte(scriptPayload))); err != nil {
+		t.Fatal(err)
+	}
+	jobs.finish(firstID, StageWorker, batchv1.JobComplete)
+
+	reconcileTimes(t, controller, 3)
+	if len(jobs.jobs) != 2 {
+		t.Fatalf("Jobs = %d, want 2 after first Gemini step completed", len(jobs.jobs))
+	}
+
+	var secondJob *batchv1.Job
+	for _, candidate := range jobs.jobs {
+		if candidate.Name != firstJob.Name {
+			secondJob = candidate
+		}
+	}
+	secondID := secondJob.Labels["kubereel.io/workflow"]
+	secondDir := filepath.ToSlash(filepath.Join("workflows", secondID))
+	if err := controller.Executor.Artifacts.Put(ctx, secondDir+"/"+executor.UncertainOutcomeFile, bytes.NewReader([]byte(`{"reason":"uncertain"}`))); err != nil {
+		t.Fatal(err)
+	}
+	jobs.finish(secondID, StageWorker, batchv1.JobFailed)
+
+	reconcileTimes(t, controller, 1)
+	got, err := controller.Runs.Get(ctx, "sample", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	phase, _, _ := unstructured.NestedString(got.Object, "status", "phase")
+	if phase != "RequiresReview" || len(jobs.jobs) != 2 {
+		t.Fatalf("expected RequiresReview without retry on uncertain submission, got status=%v jobs=%d", got.Object["status"], len(jobs.jobs))
+	}
+}
+
+func TestStepExecutorFalImageToVideoWorkflow(t *testing.T) {
+	ctx := context.Background()
+	steps := []interface{}{
+		map[string]interface{}{
+			"name":        "keyframe",
+			"type":        "image",
+			"providerRef": "fal-main",
+			"model":       "fal-ai/flux/dev",
+		},
+		map[string]interface{}{
+			"name":        "animate",
+			"type":        "video",
+			"providerRef": "fal-main",
+			"model":       "fal-ai/kling-video/v1.6/standard/image-to-video",
+			"dependsOn":   []interface{}{"keyframe"},
+		},
+		map[string]interface{}{
+			"name":      "render",
+			"type":      "ffmpeg",
+			"dependsOn": []interface{}{"animate"},
+			"ffmpeg": map[string]interface{}{
+				"operation":   renderer.OpRenderMP4,
+				"aspectRatio": "16:9",
+			},
+		},
+	}
+
+	run := testVideoRun(steps)
+	run.SetUID(types.UID("aaaa1111-bbbb-2222-cccc-333344445555"))
+	spec := run.Object["spec"].(map[string]interface{})
+	spec["inputs"] = map[string]interface{}{
+		"prompt": map[string]interface{}{"stringValue": "Neon rainy street in Tokyo"},
+	}
+	spec["workflowSnapshot"].(map[string]interface{})["outputs"] = []interface{}{
+		map[string]interface{}{"name": "final-video", "from": "render"},
+	}
+
+	vp := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "kubereel.io/v1alpha1",
+		"kind":       "VideoProvider",
+		"metadata":   map[string]interface{}{"name": "fal-main", "namespace": "test"},
+		"spec": map[string]interface{}{
+			"type":           "fal",
+			"capabilities":   []interface{}{"image", "video"},
+			"models":         []interface{}{"fal-ai/flux/dev", "fal-ai/kling-video/v1.6/standard/image-to-video"},
+			"secretRef":      map[string]interface{}{"name": "fal-creds", "key": "fal-key"},
+			"maxConcurrent":  int64(2),
+			"timeoutSeconds": int64(90),
+		},
+	}}
+
+	dynClient := fake.NewSimpleDynamicClient(runtime.NewScheme(), run, vp)
+	controller, jobs := testStepController(t, run, 4)
+	controller.Runs = dynClient.Resource(VideoRunResource()).Namespace("test")
+	controller.Executor.Runs = controller.Runs
+	controller.Executor.Providers = dynClient.Resource(VideoProviderResource()).Namespace("test")
+
+	// 1. Submit and complete the fal image keyframe step -> image.png.
+	reconcileTimes(t, controller, 2)
+	if len(jobs.jobs) != 1 {
+		t.Fatalf("Jobs after keyframe submit = %d, want 1", len(jobs.jobs))
+	}
+
+	var imageJob *batchv1.Job
+	for _, imageJob = range jobs.jobs {
+	}
+	env := imageJob.Spec.Template.Spec.Containers[0].Env
+	if len(env) != 1 || env[0].Name != executor.EnvProviderAPIKey || env[0].ValueFrom == nil ||
+		env[0].ValueFrom.SecretKeyRef.Name != "fal-creds" || env[0].ValueFrom.SecretKeyRef.Key != "fal-key" {
+		t.Fatalf("expected fal SecretKeyRef env injection, got %+v", env)
+	}
+
+	imgID := imageJob.Labels["kubereel.io/workflow"]
+	imgDir := filepath.ToSlash(filepath.Join("workflows", imgID))
+	pngBytes := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0x00, 0x00, 0x00, 0x0d}
+	if err := controller.Executor.Artifacts.Put(ctx, imgDir+"/image.png", bytes.NewReader(pngBytes)); err != nil {
+		t.Fatal(err)
+	}
+	jobs.finish(imgID, StageWorker, batchv1.JobComplete)
+
+	// 2. Submit and verify the fal image-to-video step automatically receives imageInput -> clip.mp4.
+	reconcileTimes(t, controller, 3)
+	var videoJob *batchv1.Job
+	for _, candidate := range jobs.jobs {
+		if !isJobTerminal(candidate) {
+			videoJob = candidate
+		}
+	}
+	if videoJob == nil {
+		t.Fatal("expected active fal video Job")
+	}
+
+	vidID := videoJob.Labels["kubereel.io/workflow"]
+	vidDir := filepath.ToSlash(filepath.Join("workflows", vidID))
+	reqObj, err := controller.Executor.Artifacts.Open(ctx, vidDir+"/request.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawReq, err := io.ReadAll(reqObj)
+	_ = reqObj.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var vidReq executor.StepRequest
+	if err := json.Unmarshal(rawReq, &vidReq); err != nil {
+		t.Fatal(err)
+	}
+	if vidReq.Provider != executor.ProviderFal || vidReq.Model != "fal-ai/kling-video/v1.6/standard/image-to-video" ||
+		vidReq.ImageInput != imgDir+"/image.png" {
+		t.Fatalf("unexpected fal video StepRequest: %+v", vidReq)
+	}
+
+	if err := controller.Executor.Artifacts.Put(ctx, vidDir+"/clip.mp4", bytes.NewReader(testValidMP4())); err != nil {
+		t.Fatal(err)
+	}
+	jobs.finish(vidID, StageWorker, batchv1.JobComplete)
+
+	// 3. Submit and complete the final FFmpeg render step -> output.mp4.
+	reconcileTimes(t, controller, 3)
+	var renderJob *batchv1.Job
+	for _, candidate := range jobs.jobs {
+		if !isJobTerminal(candidate) {
+			renderJob = candidate
+		}
+	}
+	if renderJob == nil || renderJob.Labels["kubereel.io/stage"] != StageRender {
+		t.Fatalf("expected active render Job, got %+v", renderJob)
+	}
+
+	renderID := renderJob.Labels["kubereel.io/workflow"]
+	renderDir := filepath.ToSlash(filepath.Join("workflows", renderID))
+	if err := controller.Executor.Artifacts.Put(ctx, renderDir+"/output.mp4", bytes.NewReader(testValidMP4())); err != nil {
+		t.Fatal(err)
+	}
+	jobs.finish(renderID, StageRender, batchv1.JobComplete)
+	reconcileTimes(t, controller, 1)
+
+	got, err := controller.Runs.Get(ctx, "sample", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	phase, _, _ := unstructured.NestedString(got.Object, "status", "phase")
+	artifacts, _, _ := unstructured.NestedStringSlice(got.Object, "status", "artifacts")
+	if phase != "Succeeded" || len(artifacts) != 3 {
+		t.Fatalf("final status = %v", got.Object["status"])
+	}
+	if err := controller.Executor.cleanupArtifacts(ctx, got, time.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("cleanupArtifacts = %v", err)
+	}
+}
+
+func TestStepExecutorFalRejectsUnlistedModel(t *testing.T) {
+	steps := []interface{}{
+		map[string]interface{}{
+			"name":        "keyframe",
+			"type":        "image",
+			"providerRef": "fal-main",
+			"model":       "fal-ai/unlisted-model",
+		},
+	}
+
+	run := testVideoRun(steps)
+	run.Object["spec"].(map[string]interface{})["inputs"] = map[string]interface{}{
+		"prompt": map[string]interface{}{"stringValue": "Test prompt"},
+	}
+
+	vp := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "kubereel.io/v1alpha1",
+		"kind":       "VideoProvider",
+		"metadata":   map[string]interface{}{"name": "fal-main", "namespace": "test"},
+		"spec": map[string]interface{}{
+			"type":         "fal",
+			"capabilities": []interface{}{"image"},
+			"models":       []interface{}{"fal-ai/flux/dev"},
+			"secretRef":    map[string]interface{}{"name": "fal-creds", "key": "fal-key"},
+		},
+	}}
+
+	dynClient := fake.NewSimpleDynamicClient(runtime.NewScheme(), run, vp)
+	controller, jobs := testStepController(t, run, 2)
+	controller.Runs = dynClient.Resource(VideoRunResource()).Namespace("test")
+	controller.Executor.Runs = controller.Runs
+	controller.Executor.Providers = dynClient.Resource(VideoProviderResource()).Namespace("test")
+
+	reconcileTimes(t, controller, 2)
+	got, err := controller.Runs.Get(context.Background(), "sample", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	phase, _, _ := unstructured.NestedString(got.Object, "status", "phase")
+	errMsg, _, _ := unstructured.NestedString(got.Object, "status", "error")
+	if phase != "Failed" || len(jobs.jobs) != 0 || !strings.Contains(errMsg, "not listed in VideoProvider models") {
+		t.Fatalf("expected Failed without Job submission, got status=%v jobs=%d", got.Object["status"], len(jobs.jobs))
 	}
 }

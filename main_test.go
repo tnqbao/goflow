@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"net"
 	"net/http"
@@ -15,6 +17,9 @@ import (
 	"time"
 
 	"github.com/tnqbao/kubereel/internal/config"
+	"github.com/tnqbao/kubereel/internal/repository"
+	"github.com/tnqbao/kubereel/internal/service"
+	"github.com/tnqbao/kubereel/internal/web"
 )
 
 func TestBaseRoutes(t *testing.T) {
@@ -28,6 +33,7 @@ func TestBaseRoutes(t *testing.T) {
 		{http.MethodGet, "/healthz", http.StatusOK},
 		{http.MethodGet, "/readyz", http.StatusOK},
 		{http.MethodHead, "/healthz", http.StatusOK},
+		{http.MethodHead, "/readyz", http.StatusOK},
 		{http.MethodPost, "/healthz", http.StatusMethodNotAllowed},
 		{http.MethodPost, "/readyz", http.StatusMethodNotAllowed},
 		{http.MethodGet, "/", http.StatusSeeOther},
@@ -41,7 +47,7 @@ func TestBaseRoutes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			newBaseMux(db).ServeHTTP(recorder, httptest.NewRequest(tt.method, tt.path, nil))
+			newBaseEcho(db).ServeHTTP(recorder, httptest.NewRequest(tt.method, tt.path, nil))
 			if recorder.Code != tt.status {
 				t.Errorf("status = %d, want %d", recorder.Code, tt.status)
 			}
@@ -140,12 +146,18 @@ func TestServeHTTPClosesConnectionsAfterShutdownTimeout(t *testing.T) {
 }
 
 func TestWorkerAndRenderCommands(t *testing.T) {
+	ensureTestFFmpegInPath(t)
+
 	dir := t.TempDir()
 	requestPath := filepath.Join(dir, "request.json")
-	scenePath := filepath.Join(dir, "scene.svg")
-	finalPath := filepath.Join(dir, "final.svg")
+	clipPath := filepath.Join(dir, "clip.mp4")
+	renderSpecPath := filepath.Join(dir, "render.json")
+	finalPath := filepath.Join(dir, "final.mp4")
 
-	if err := os.WriteFile(requestPath, []byte(`{"prompt":"A scene"}`), 0600); err != nil {
+	if err := os.WriteFile(requestPath, []byte(`{"type":"video","prompt":"A scene"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(renderSpecPath, []byte(`{"operation":"normalize","inputs":["clip.mp4"]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -153,8 +165,8 @@ func TestWorkerAndRenderCommands(t *testing.T) {
 	cfg.Database = filepath.Join(dir, "db")
 
 	commands := [][]string{
-		{"worker", "--input", requestPath, "--output", scenePath},
-		{"render", "--input", scenePath, "--output", finalPath},
+		{"worker", "--input", requestPath, "--output", clipPath},
+		{"render", "--input", renderSpecPath, "--output", finalPath},
 	}
 	for _, args := range commands {
 		if err := executeCommand(context.Background(), args, cfg); err != nil {
@@ -216,6 +228,8 @@ func TestRenderCommandFFmpegSpec(t *testing.T) {
 }
 
 func TestSingleExecutableCommands(t *testing.T) {
+	ensureTestFFmpegInPath(t)
+
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "kubereel")
 
@@ -224,17 +238,27 @@ func TestSingleExecutableCommands(t *testing.T) {
 		t.Fatalf("build executable: %v\n%s", err, output)
 	}
 
-	requestPath := filepath.Join(dir, "request.json")
-	scenePath := filepath.Join(dir, "scene.svg")
-	resultPath := filepath.Join(dir, "result.svg")
+	llmRequestPath := filepath.Join(dir, "llm.json")
+	scriptPath := filepath.Join(dir, "script.json")
+	videoRequestPath := filepath.Join(dir, "video.json")
+	clipPath := filepath.Join(dir, "clip.mp4")
+	renderSpecPath := filepath.Join(dir, "render.json")
+	resultPath := filepath.Join(dir, "result.mp4")
 
-	if err := os.WriteFile(requestPath, []byte(`{"prompt":"Single executable"}`), 0600); err != nil {
+	if err := os.WriteFile(llmRequestPath, []byte(`{"type":"llm","prompt":"Single executable"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(videoRequestPath, []byte(`{"type":"video","prompt":"Single executable"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(renderSpecPath, []byte(`{"operation":"resize","inputs":["clip.mp4"],"width":640,"height":360}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 
 	commands := [][]string{
-		{"worker", "--input", requestPath, "--output", scenePath},
-		{"render", "--input", scenePath, "--output", resultPath},
+		{"worker", "--input", llmRequestPath, "--output", scriptPath},
+		{"worker", "--input", videoRequestPath, "--output", clipPath},
+		{"render", "--input", renderSpecPath, "--output", resultPath},
 	}
 	for _, args := range commands {
 		cmd := exec.Command(binary, args...)
@@ -244,12 +268,17 @@ func TestSingleExecutableCommands(t *testing.T) {
 		}
 	}
 
-	data, err := os.ReadFile(resultPath)
+	scriptData, err := os.ReadFile(scriptPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "Single executable") {
-		t.Fatal("rendered artifact does not contain the request")
+	if !strings.Contains(string(scriptData), "Single executable") {
+		t.Fatal("script artifact does not contain the request")
+	}
+
+	mp4Data, err := os.ReadFile(resultPath)
+	if err != nil || len(mp4Data) < 24 || string(mp4Data[4:8]) != "ftyp" {
+		t.Fatalf("rendered MP4 is invalid (len=%d, err=%v)", len(mp4Data), err)
 	}
 
 	if err := exec.Command(binary, "unknown").Run(); err == nil {
@@ -257,8 +286,62 @@ func TestSingleExecutableCommands(t *testing.T) {
 	}
 }
 
+func ensureTestFFmpegInPath(t *testing.T) {
+	t.Helper()
+
+	_, hasFFmpeg := exec.LookPath("ffmpeg")
+	_, hasFFprobe := exec.LookPath("ffprobe")
+	if hasFFmpeg == nil && hasFFprobe == nil {
+		return
+	}
+
+	binDir := t.TempDir()
+	templateMP4 := filepath.Join(binDir, "sample.mp4")
+
+	var buf bytes.Buffer
+	writeBox := func(boxType string, payload []byte) {
+		var header [8]byte
+		binary.BigEndian.PutUint32(header[:4], uint32(8+len(payload)))
+		copy(header[4:8], boxType)
+		buf.Write(header[:])
+		buf.Write(payload)
+	}
+	writeBox("ftyp", []byte("isom\x00\x00\x02\x00isomiso2mp41"))
+	writeBox("moov", []byte("movie-header"))
+	writeBox("mdat", []byte("video-frames"))
+
+	if err := os.WriteFile(templateMP4, buf.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	ffmpegBody := "#!/bin/sh\nset -eu\nout=\"\"\nfor arg in \"$@\"; do out=\"$arg\"; done\n" +
+		"if [ \"$out\" = \"pipe:1\" ]; then cat \"" + templateMP4 + "\"; else cp \"" + templateMP4 + "\" \"$out\"; fi\n"
+	if err := os.WriteFile(filepath.Join(binDir, "ffmpeg"), []byte(ffmpegBody), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	ffprobeBody := `#!/bin/sh
+set -eu
+target=""
+for arg in "$@"; do target="$arg"; done
+case "$target" in
+  *output.mp4)
+    printf '{"format":{"format_name":"mov,mp4"},"streams":[{"codec_type":"video","codec_name":"h264","width":640,"height":360},{"codec_type":"video","codec_name":"h264","width":320,"height":240}]}\n'
+    ;;
+  *)
+    printf '{"format":{"format_name":"mov,mp4"},"streams":[{"codec_type":"video","codec_name":"mpeg4","width":320,"height":240}]}\n'
+    ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(binDir, "ffprobe"), []byte(ffprobeBody), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func TestEmbeddedAssets(t *testing.T) {
-	handler := newBaseMux(openTestDatabase(t))
+	handler := newBaseEcho(openTestDatabase(t))
 
 	home := httptest.NewRecorder()
 	handler.ServeHTTP(home, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -321,7 +404,7 @@ func TestOpenDatabaseFailure(t *testing.T) {
 
 func TestReadinessDatabaseFailure(t *testing.T) {
 	db := openTestDatabase(t)
-	handler := newBaseMux(db)
+	handler := newBaseEcho(db)
 
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
@@ -341,6 +424,40 @@ func TestReadinessDatabaseFailure(t *testing.T) {
 		if recorder.Code != tt.status {
 			t.Errorf("%s status = %d, want %d", tt.path, recorder.Code, tt.status)
 		}
+	}
+}
+
+func TestStandaloneServerRequiresSetupAndAuthentication(t *testing.T) {
+	db := openTestDatabase(t)
+	authSvc := service.NewAuthService(repository.NewAuthRepository(db), config.Defaults().Auth)
+
+	router := newBaseEcho(db)
+	(web.AuthController{Service: authSvc}).Register(router)
+	registerStandaloneControllers(router, authSvc)
+
+	uninit := httptest.NewRecorder()
+	router.ServeHTTP(uninit, httptest.NewRequest(http.MethodGet, "/workflows", nil))
+	if uninit.Code != http.StatusSeeOther || uninit.Header().Get("Location") != "/setup" {
+		t.Fatalf("standalone /workflows before setup = %d %q", uninit.Code, uninit.Header().Get("Location"))
+	}
+
+	issued, err := authSvc.Setup(context.Background(), "admin", "standalone-password-123", "", repository.TokenKindSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unauth := httptest.NewRecorder()
+	router.ServeHTTP(unauth, httptest.NewRequest(http.MethodGet, "/workflows", nil))
+	if unauth.Code != http.StatusSeeOther || !strings.HasPrefix(unauth.Header().Get("Location"), "/login") {
+		t.Fatalf("standalone /workflows without session = %d %q", unauth.Code, unauth.Header().Get("Location"))
+	}
+
+	authedReq := httptest.NewRequest(http.MethodGet, "/workflows", nil)
+	authedReq.AddCookie(&http.Cookie{Name: service.SessionCookieName, Value: issued.Token})
+	authed := httptest.NewRecorder()
+	router.ServeHTTP(authed, authedReq)
+	if authed.Code != http.StatusServiceUnavailable {
+		t.Fatalf("authenticated standalone /workflows = %d, want 503", authed.Code)
 	}
 }
 

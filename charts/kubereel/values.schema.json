@@ -22,6 +22,16 @@
         "jobTTLSeconds": {"type": "integer", "minimum": 0, "maximum": 2147483647}
       }
     },
+    "auth": {
+      "type": "object",
+      "properties": {
+        "sessionTTLSeconds": {"type": "integer", "minimum": 60, "maximum": 31536000},
+        "existingSecret": {"type": "string"},
+        "username": {"type": "string", "minLength": 3, "maxLength": 64},
+        "passwordKey": {"type": "string"},
+        "setupTokenKey": {"type": "string"}
+      }
+    },
     "providers": {
       "type": "object",
       "properties": {"mock": {"type": "object", "properties": {"enabled": {"const": true}}}}

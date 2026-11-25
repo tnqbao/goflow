@@ -1,0 +1,126 @@
+openapi: 3.0.3
+info:
+  title: KubeReel Artifact Management API
+  version: "1"
+servers:
+  - url: /api/v1
+security:
+  - bearer: []
+  - session: []
+paths:
+  /artifacts:
+    get:
+      summary: List available artifacts published by VideoRuns
+      parameters:
+        - name: runId
+          in: query
+          schema: {type: string, maxLength: 253}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+        - name: continue
+          in: query
+          description: Opaque token from the previous page. Keep runId unchanged. A page can be empty and still have a continuation token.
+          schema: {type: string, maxLength: 8192}
+      responses:
+        "200":
+          description: Page of available artifacts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/Artifact"}
+                  continue: {type: string}
+        "410": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+  /artifacts/{id}:
+    parameters:
+      - {$ref: "#/components/parameters/ID"}
+    get:
+      summary: Get artifact metadata
+      responses:
+        "200":
+          description: Artifact metadata
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Artifact"}
+        "404": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      summary: Delete an artifact file after its run has settled
+      security:
+        - bearer: []
+        - session: []
+          csrf: []
+      responses:
+        "204": {description: File deleted. The historical run reference remains.}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+  /artifacts/{id}/download:
+    parameters:
+      - {$ref: "#/components/parameters/ID"}
+    get:
+      summary: Download an artifact as an attachment
+      parameters:
+        - name: Range
+          in: header
+          schema: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/Download"}
+        "206": {$ref: "#/components/responses/Download"}
+        "416": {description: Requested range is not satisfiable}
+        default: {$ref: "#/components/responses/Error"}
+    head:
+      summary: Inspect download headers without transferring the file
+      responses:
+        "200": {description: Download headers}
+        default: {$ref: "#/components/responses/Error"}
+components:
+  securitySchemes:
+    bearer: {type: http, scheme: bearer}
+    session: {type: apiKey, in: cookie, name: kubereel_session}
+    csrf: {type: apiKey, in: header, name: X-CSRF-Token}
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      description: Opaque identifier returned by the list endpoint.
+      schema: {type: string}
+  schemas:
+    Artifact:
+      type: object
+      required: [id, runId, name, contentType, sizeBytes, modifiedAt]
+      properties:
+        id: {type: string}
+        runId: {type: string}
+        name: {type: string}
+        contentType: {type: string}
+        sizeBytes: {type: integer, format: int64, minimum: 0}
+        modifiedAt: {type: string, format: date-time}
+  responses:
+    Download:
+      description: Artifact bytes with the artifact's media type
+      headers:
+        Content-Disposition:
+          schema: {type: string}
+        Accept-Ranges:
+          schema: {type: string}
+      content:
+        "*/*":
+          schema: {type: string, format: binary}
+    Error:
+      description: Authentication, validation, run state, or persistence error
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error, message]
+            properties:
+              error: {type: string}
+              message: {type: string}

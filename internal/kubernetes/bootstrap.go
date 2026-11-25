@@ -8,8 +8,9 @@ import (
 	"time"
 
 	"github.com/tnqbao/kubereel/internal/config"
+	"github.com/tnqbao/kubereel/internal/repository"
+	"github.com/tnqbao/kubereel/internal/service"
 	"github.com/tnqbao/kubereel/internal/storage"
-	"github.com/tnqbao/kubereel/internal/workflow"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
@@ -21,9 +22,11 @@ import (
 const clusterProbeTimeout = 10 * time.Second
 
 type clusterClients struct {
-	jobs Jobs
-	core coreclient.CoreV1Interface
-	runs dynamic.ResourceInterface
+	workflows dynamic.ResourceInterface
+	jobs      batchclient.JobInterface
+	core      coreclient.CoreV1Interface
+	runs      dynamic.ResourceInterface
+	providers dynamic.ResourceInterface
 }
 
 // NewControllerFromCluster connects to the in-cluster Kubernetes API, verifies RBAC
@@ -31,7 +34,7 @@ type clusterClients struct {
 func NewControllerFromCluster(
 	ctx context.Context,
 	cfg config.Config,
-	store *workflow.Store,
+	workflows *service.WorkflowService,
 	artifacts storage.Store,
 ) (*Controller, error) {
 	if !cfg.Kubernetes.Enabled {
@@ -55,21 +58,28 @@ func NewControllerFromCluster(
 	jobLock := &sync.Mutex{}
 	executor := &StepExecutor{
 		Runs:          clients.runs,
+		Providers:     clients.providers,
 		Jobs:          clients.jobs,
-		Store:         store,
+		Workflows:     workflows,
 		Config:        jobCfg,
 		Artifacts:     artifacts,
 		MaxConcurrent: cfg.Kubernetes.MaxConcurrentJobs,
 		JobLock:       jobLock,
 	}
 
+	definitions := repository.NewWorkflowDefinitionRepository(clients.workflows)
+	runs := repository.NewExecutionRepository(clients.runs, clients.jobs, clients.core.Pods(cfg.Kubernetes.Namespace))
 	return &Controller{
-		Store:         store,
-		Jobs:          clients.jobs,
-		Config:        jobCfg,
-		Artifacts:     artifacts,
-		MaxConcurrent: cfg.Kubernetes.MaxConcurrentJobs,
-		JobLock:       jobLock,
+		Schedules:           service.NewSchedules(definitions, runs),
+		ExecutionRepository: runs,
+		WorkflowDefinitions: definitions,
+		ProviderRepository:  repository.NewProviderRepository(clients.providers, clients.core.Secrets(cfg.Kubernetes.Namespace)),
+		Workflows:           workflows,
+		Jobs:                clients.jobs,
+		Config:              jobCfg,
+		Artifacts:           artifacts,
+		MaxConcurrent:       cfg.Kubernetes.MaxConcurrentJobs,
+		JobLock:             jobLock,
 		VideoRuns: &VideoRunController{
 			Runs:     clients.runs,
 			Executor: executor,
@@ -122,9 +132,11 @@ func newClusterClients(namespace string) (clusterClients, error) {
 	}
 
 	return clusterClients{
-		jobs: batchClient.Jobs(namespace),
-		core: coreClient,
-		runs: dynamicClient.Resource(VideoRunResource()).Namespace(namespace),
+		workflows: dynamicClient.Resource(repository.VideoWorkflowResource()).Namespace(namespace),
+		jobs:      batchClient.Jobs(namespace),
+		core:      coreClient,
+		runs:      dynamicClient.Resource(VideoRunResource()).Namespace(namespace),
+		providers: dynamicClient.Resource(VideoProviderResource()).Namespace(namespace),
 	}, nil
 }
 
@@ -138,6 +150,14 @@ func verifyClusterAccess(ctx context.Context, clients clusterClients, namespace 
 
 	if _, err := clients.runs.List(probeCtx, metav1.ListOptions{Limit: 1}); err != nil {
 		return fmt.Errorf("verify VideoRun access: %w", err)
+	}
+
+	if _, err := clients.providers.List(probeCtx, metav1.ListOptions{Limit: 1}); err != nil {
+		return fmt.Errorf("verify VideoProvider access: %w", err)
+	}
+
+	if _, err := clients.workflows.List(probeCtx, metav1.ListOptions{Limit: 1}); err != nil {
+		return fmt.Errorf("verify VideoWorkflow access: %w", err)
 	}
 
 	claim, err := clients.core.PersistentVolumeClaims(namespace).Get(probeCtx, jobCfg.Claim, metav1.GetOptions{})

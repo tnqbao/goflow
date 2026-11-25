@@ -6,15 +6,13 @@ Self-hosted, Kubernetes-native platform for automating AI video production.
 
 ## Architecture
 
-KubeReel runs as a single Go executable and single container image (`iamqbao/kubereel`) containing the control plane, embedded UI, and FFmpeg:
+KubeReel runs as a single Go executable and single container image (`iamqbao/kubereel`) built on Echo (`Controller` → `Service` → `Repository`) with embedded UI and FFmpeg:
 
-- `kubereel serve` — starts the HTTP server, embedded dashboard, and Kubernetes controllers.
-- `kubereel worker` — executes an assigned workflow step inside a temporary Kubernetes Job.
+- `kubereel serve` — starts the Echo HTTP server, embedded dashboard, and Kubernetes controllers.
+- `kubereel worker` — executes an assigned workflow step (`mock`, official `gemini` text generation, or official `fal.ai` Queue API image/video generation) inside a temporary Kubernetes Job.
 - `kubereel render` — executes controlled FFmpeg media operations (`merge`, `trim`, `resize`, `aspect_ratio`, `add_audio`, `normalize`, `render_mp4`) inside an isolated scratch directory without shell execution.
 
 Kubernetes state is managed via three CRDs (`VideoWorkflow`, `VideoRun`, `VideoProvider`) and PVC-backed artifact storage, with no external database or message broker required.
-
-> **Security notice:** Authentication is not yet implemented. Run KubeReel only on a trusted network and access it via local port-forwarding; do not expose the service or Ingress publicly.
 
 ---
 
@@ -35,17 +33,31 @@ Forward the service port locally:
 kubectl -n kubereel port-forward service/kubereel-kubereel 8080:8080
 ```
 
-- **Web UI:** Open `http://localhost:8080/workflows` to run the built-in Mock workflow.
-- **Health checks:** `http://localhost:8080/healthz` and `http://localhost:8080/readyz`.
-- **API test:**
+- **Web UI:** Open `http://localhost:8080`, complete the one-time **Initial Administrator Setup** (`/setup`), then run the built-in Mock workflow at `/workflows` and preview/download the rendered MP4.
+- **Health checks:** `http://localhost:8080/healthz` and `http://localhost:8080/readyz` (unauthenticated probes).
+- **API authentication & workflow test:**
 
 ```sh
+# 1. One-time initial administrator setup (or POST /api/v1/auth/login afterwards)
+TOKEN=$(curl -sS -X POST http://localhost:8080/api/v1/auth/setup \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"replace-with-strong-password"}' | jq -r .token)
+
+# 2. Submit and download a Mock MP4 workflow using Bearer authentication
 curl -i -X POST http://localhost:8080/api/workflows \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"A quiet lake"}'
 
-curl http://localhost:8080/api/workflows/<WORKFLOW_ID>
-curl -o mock-scene.svg http://localhost:8080/api/workflows/<WORKFLOW_ID>/artifact
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/workflows/<WORKFLOW_ID>
+curl -H "Authorization: Bearer $TOKEN" -o mock-video.mp4 http://localhost:8080/api/workflows/<WORKFLOW_ID>/artifact
+```
+
+- **Multi-step DAG (`VideoWorkflow` + `VideoRun`):**
+
+```sh
+kubectl -n kubereel apply -f examples/mock-horror-shorts.yaml
+kubectl -n kubereel get videorun horror-shorts-demo -w
 ```
 
 ### Common Helm Values
@@ -61,6 +73,8 @@ curl -o mock-scene.svg http://localhost:8080/api/workflows/<WORKFLOW_ID>/artifac
 | `storage.retentionSeconds` | `0` | Expiry for completed `VideoRun` artifacts (`0` disables) |
 | `execution.maxConcurrentJobs` | `5` | Max concurrent Kubernetes Jobs |
 | `execution.jobTTLSeconds` | `86400` | Finished Job retention window (24h) |
+| `auth.sessionTTLSeconds` | `86400` | Browser session lifetime in seconds (24h) |
+| `auth.existingSecret` | `""` | Optional Kubernetes Secret for headless admin bootstrap |
 | `ingress.enabled` | `false` | Optional Ingress (requires `ingress.host`) |
 
 ### Upgrading & CRDs
@@ -140,5 +154,43 @@ python3 charts/kubereel/tests/test_chart.py
 
 ## Current Status & Limitations
 
-- The `mock` provider is enabled out of the box (no API keys required). Real provider integrations (Gemini, fal.ai), the complete Mock end-to-end MP4 workflow, authentication, and the `/api/v1` contract are in active development.
-- Current `VideoRun` execution supports `image` steps (`providerRef: mock`, producing SVG artifacts) and `ffmpeg` steps (`merge`, `trim`, `resize`, `aspect_ratio`, `add_audio`, `normalize`, `render_mp4`, producing validated H.264 MP4 artifacts); failed Jobs retry up to `maxAttempts`, while missing/uncertain Jobs transition to `RequiresReview` rather than risking duplicate submission.
+- The `mock` provider and FFmpeg produce complete downloadable H.264 MP4 videos end-to-end without external API keys.
+- Official **Google Gemini** (`gemini-4-hydrogen` default via the Interactions API) is supported for `llm` steps and official **fal.ai** (via `https://queue.fal.run`) is supported for `image`, text-to-video, and image-to-video steps using `VideoProvider` resources and Kubernetes `Secret` (`secretRef`) credentials — API keys are injected directly into worker Job pods via `secretKeyRef`, endpoints enforce HTTPS + SSRF protection, `429` rate limits honor `Retry-After` with bounded backoff, and uncertain billable submissions transition to `RequiresReview` without automatic retry.
+- Built-in **Authentication** protects the Web Dashboard, management REST APIs, and artifact downloads with one-time initial administrator setup (`/setup` & `/api/v1/auth/setup`), `bcrypt` password hashing, `HttpOnly`/`SameSite=Lax` browser sessions with CSRF protection, SHA-256-hashed personal Bearer API tokens (`/api/v1/auth/tokens`), and per-IP login rate limiting.
+- The `/api/v1` provider, workflow, execution, and artifact management endpoints are in active development.
+
+### Provider management
+
+The [Provider API](docs/provider-api.yaml) runs in Kubernetes mode. Use an administrator Bearer token or a signed-in browser session with a CSRF token for writes. Complete the initial administrator setup over a trusted connection before exposing an ingress.
+
+Create a provider with its Kubernetes name, type and supported capabilities. Gemini and fal also require an API key on creation. Keys go into namespace-scoped Kubernetes Secrets and cannot be retrieved through the API. PATCH accepts a new key for rotation and `enabled: false` to prevent new step submissions. Existing Jobs can still reference the previous Secret version, which is retained until provider deletion. Deleting a provider can affect pending Jobs and retries that reference it, so let them finish before deletion.
+
+The API accepts official provider endpoints for writes. The built-in Mock remains available without configuration, and the versioned list returns persisted VideoProvider resources. The connectivity check validates local Mock configuration or calls the [Gemini model catalog](https://ai.google.dev/api/models) or [fal model pricing API](https://fal.ai/docs/documentation/model-apis/pricing) without submitting generation. fal checks the first configured model. A successful metadata check does not establish access to paid generation.
+
+For an existing Helm installation, apply the updated CRD before upgrading the chart so Kubernetes preserves the enabled setting.
+
+### Workflow management
+
+The authenticated [Workflow API](docs/workflow-api.yaml) manages reusable VideoWorkflow definitions in Kubernetes mode. POST accepts a Kubernetes resource name as `id` and the workflow definition as `spec`. GET returns that spec for export and accepts `limit` and `continue` on the list. PATCH takes only the fields to change under `spec`. Arrays replace the corresponding whole field. Include the returned `resourceVersion` to detect edits made since the definition was read.
+
+Deleting a definition preserves existing runs and their workflow snapshots. For browser writes, send the session's CSRF token. Scripted clients can authenticate with a Bearer token.
+
+### Execution management
+
+The authenticated [Execution API](docs/execution-api.yaml) starts runs from stored VideoWorkflow definitions in Kubernetes mode. POST to `/api/v1/workflows/{id}/runs` with typed inputs and poll the run URL in the `Location` response header. The run keeps the workflow snapshot and input values used at launch.
+
+Cancel requests are reconciled by the operator. A retry starts the entire snapshot in a new run once a failed or cancelled run has no active work. Repeating a retry request for the same source run returns its existing retry. Runs marked `RequiresReview` must be investigated before starting new work. Runs referencing providers other than the built-in Mock require `allowPaid: true` on both launch and retry.
+
+A run exposes its step status and recorded artifact keys. The log endpoint reads a bounded tail from a recorded step Job while its Pod logs remain available.
+
+### Artifact management
+
+The authenticated [Artifact API](docs/artifact-api.yaml) lists available files published by Kubernetes VideoRuns. Filter the list with `runId` and use the returned artifact IDs to fetch metadata, download byte ranges or delete files. Follow `continue` until it is absent, including when a page is empty.
+
+Deletion requires a settled run and no active Jobs. It removes the file while preserving the historical reference in run status. The catalog skips deleted and expired files. The older SQLite workflow prototype continues to serve its MP4 output through its existing workflow download endpoint.
+
+### Scheduled execution
+
+Use the authenticated [Schedule API](docs/schedule-api.yaml) at `/api/v1/workflows/{id}/schedule` to set one recurring schedule per Kubernetes workflow. Supply a five-field UTC cron expression and the typed inputs needed by the workflow. Include `allowPaid: true` to approve recurring use of external providers. PUT replaces the schedule, and `paused: true` pauses future submissions. To resume, PUT the schedule with `paused: false`.
+
+Each launch snapshots the current workflow definition. After downtime, the scheduler evaluates only the newest occurrence within the last 15 minutes. It skips occurrences while the previous scheduled run has active work or needs review. Pause and deletion leave submitted runs in place, and a submission already in progress can complete. Use the Execution API to cancel a submitted run.

@@ -33,6 +33,14 @@ execution:
   maxConcurrentJobs: 5
   jobTTLSeconds: 86400
 
+auth:
+  sessionTTLSeconds: 86400
+  # Optional Kubernetes Secret for headless initial administrator bootstrap.
+  existingSecret: ""
+  username: "admin"
+  passwordKey: "password"
+  setupTokenKey: ""
+
 providers:
   mock:
     enabled: true

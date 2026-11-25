@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/tnqbao/kubereel/internal/repository"
 	"github.com/tnqbao/kubereel/internal/workflow"
 	batchv1 "k8s.io/api/batch/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -26,10 +27,15 @@ const informerResyncPeriod = time.Minute
 
 // VideoRunResource identifies the VideoRun Custom Resource in the kubereel.io group.
 func VideoRunResource() schema.GroupVersionResource {
+	return repository.VideoRunResource()
+}
+
+// VideoProviderResource identifies the VideoProvider Custom Resource in the kubereel.io group.
+func VideoProviderResource() schema.GroupVersionResource {
 	return schema.GroupVersionResource{
 		Group:    "kubereel.io",
 		Version:  "v1alpha1",
-		Resource: "videoruns",
+		Resource: "videoproviders",
 	}
 }
 
