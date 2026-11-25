@@ -75,11 +75,12 @@ func TestWorkflowEndpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resultPath := filepath.Join("workflows", created.ID, "final.svg")
+	resultPath := filepath.Join("workflows", created.ID, "final.mp4")
 	if err := os.MkdirAll(filepath.Join(dir, "workflows", created.ID), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, resultPath), []byte("<svg/>"), 0600); err != nil {
+	mp4Stub := []byte("\x00\x00\x00\x14ftypisom\x00\x00\x02\x00mp41")
+	if err := os.WriteFile(filepath.Join(dir, resultPath), mp4Stub, 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Transition(context.Background(), created.ID, "running", "succeeded", resultPath, ""); err != nil {
@@ -88,15 +89,15 @@ func TestWorkflowEndpoints(t *testing.T) {
 
 	artifactResp := httptest.NewRecorder()
 	mux.ServeHTTP(artifactResp, httptest.NewRequest(http.MethodGet, "/api/workflows/"+created.ID+"/artifact", nil))
-	if artifactResp.Code != http.StatusOK || artifactResp.Body.String() != "<svg/>" {
-		t.Fatalf("artifact: %d %s", artifactResp.Code, artifactResp.Body.String())
+	if artifactResp.Code != http.StatusOK || artifactResp.Header().Get("Content-Type") != "video/mp4" || artifactResp.Body.String() != string(mp4Stub) {
+		t.Fatalf("artifact: %d %s %q", artifactResp.Code, artifactResp.Header().Get("Content-Type"), artifactResp.Body.String())
 	}
 
 	rangeReq := httptest.NewRequest(http.MethodGet, "/api/workflows/"+created.ID+"/artifact", nil)
-	rangeReq.Header.Set("Range", "bytes=1-3")
+	rangeReq.Header.Set("Range", "bytes=4-7")
 	rangeResp := httptest.NewRecorder()
 	mux.ServeHTTP(rangeResp, rangeReq)
-	if rangeResp.Code != http.StatusPartialContent || rangeResp.Body.String() != "svg" {
+	if rangeResp.Code != http.StatusPartialContent || rangeResp.Body.String() != "ftyp" {
 		t.Fatalf("artifact range: %d %s", rangeResp.Code, rangeResp.Body.String())
 	}
 

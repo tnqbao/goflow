@@ -136,12 +136,16 @@ func (e *StepExecutor) validateConfig() error {
 	return nil
 }
 
-func isSupportedMockImageStep(step executableStep) bool {
-	return step.Type == "image" && step.ProviderRef == "mock"
+func isSupportedMockProviderStep(step executableStep) bool {
+	if step.ProviderRef != "mock" {
+		return false
+	}
+
+	return step.Type == mock.StepLLM || step.Type == mock.StepImage || step.Type == mock.StepVideo
 }
 
 func isSupportedExecutableStep(step executableStep) bool {
-	return isSupportedMockImageStep(step) || step.Type == "ffmpeg"
+	return isSupportedMockProviderStep(step) || step.Type == "ffmpeg"
 }
 
 func indexExecutableSteps(steps []executableStep) map[string]executableStep {
@@ -179,10 +183,10 @@ func prepareStepPayload(
 		return nil, "", "", err
 	}
 	if !valid {
-		return nil, "", "mock image requires a nonempty prompt of at most 8192 bytes", nil
+		return nil, "", "mock step requires a nonempty prompt or topic of at most 8192 bytes", nil
 	}
 
-	payload, err := json.Marshal(mock.Request{Prompt: prompt})
+	payload, err := json.Marshal(mock.Request{Type: step.Type, Prompt: prompt})
 	if err != nil {
 		return nil, "", "", fmt.Errorf("encode mock request: %w", err)
 	}
@@ -206,7 +210,7 @@ func prepareFFmpegPayload(
 	req := *step.FFmpeg
 	rawInputs := req.Inputs
 	if len(rawInputs) == 0 && len(step.DependsOn) > 0 {
-		rawInputs = step.DependsOn
+		rawInputs = defaultFFmpegDependencies(step.DependsOn, stepsByName)
 	}
 
 	resolvedInputs, invalidReason, err := resolveFFmpegInputs(uid, step, rawInputs, stepsByName, statusesByName)
@@ -283,18 +287,58 @@ func resolveFFmpegReference(
 	return stepOutputArtifactKey(depStep, depWorkflowID), "", nil
 }
 
+func defaultFFmpegDependencies(dependsOn []string, stepsByName map[string]executableStep) []string {
+	mediaDeps := make([]string, 0, len(dependsOn))
+	for _, depName := range dependsOn {
+		dep := stepsByName[depName]
+		if dep.Type == mock.StepVideo || dep.Type == "ffmpeg" {
+			mediaDeps = append(mediaDeps, depName)
+		}
+	}
+
+	if len(mediaDeps) > 0 {
+		return mediaDeps
+	}
+
+	return dependsOn
+}
+
 func readMockPrompt(run *unstructured.Unstructured) (string, bool, error) {
 	prompt, found, err := unstructured.NestedString(run.Object, "spec", "inputs", "prompt", "stringValue")
 	if err != nil {
 		return "", false, fmt.Errorf("read mock prompt: %w", err)
 	}
+	if found {
+		trimmed := strings.TrimSpace(prompt)
+		return prompt, trimmed != "" && len(trimmed) <= maxPromptBytes, nil
+	}
 
-	trimmed := strings.TrimSpace(prompt)
-	if !found || trimmed == "" || len(trimmed) > maxPromptBytes {
+	topic, hasTopic, err := unstructured.NestedString(run.Object, "spec", "inputs", "topic", "stringValue")
+	if err != nil {
+		return "", false, fmt.Errorf("read workflow topic: %w", err)
+	}
+	if !hasTopic {
 		return "", false, nil
 	}
 
-	return prompt, true, nil
+	combined := strings.TrimSpace(topic)
+	if combined == "" {
+		return "", false, nil
+	}
+
+	style, hasStyle, err := unstructured.NestedString(run.Object, "spec", "inputs", "style", "stringValue")
+	if err != nil {
+		return "", false, fmt.Errorf("read workflow style: %w", err)
+	}
+	if hasStyle && strings.TrimSpace(style) != "" {
+		combined = combined + " (" + strings.TrimSpace(style) + ")"
+	}
+
+	if len(combined) > maxPromptBytes {
+		return "", false, nil
+	}
+
+	return combined, true, nil
 }
 
 func executableSteps(run *unstructured.Unstructured) ([]executableStep, error) {
@@ -555,11 +599,14 @@ func (e *StepExecutor) recordStepSuccess(
 }
 
 func validateStepArtifact(ctx context.Context, artifacts storage.Store, step executableStep, artifactKey string) error {
-	if step.Type == "ffmpeg" {
+	switch step.Type {
+	case mock.StepLLM:
+		return mock.ValidateScript(ctx, artifacts, artifactKey)
+	case mock.StepVideo, "ffmpeg":
 		return renderer.ValidateMP4(ctx, artifacts, artifactKey)
+	default:
+		return mock.ValidateSVG(ctx, artifacts, artifactKey)
 	}
-
-	return mock.ValidateSVG(ctx, artifacts, artifactKey)
 }
 
 func appendRunArtifact(status map[string]interface{}, artifactPath string) error {

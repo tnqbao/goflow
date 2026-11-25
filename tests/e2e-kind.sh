@@ -118,7 +118,7 @@ spec:
     steps:
       - name: script
         type: llm
-        providerRef: mock
+        providerRef: sample-provider
   inputs:
     topic: {stringValue: forest}
     clips: {integerValue: 2}
@@ -340,6 +340,64 @@ if [ "$ffmpeg_probe" != "h264,320,180" ]; then
   printf 'unexpected FFmpeg output stream: %s\n' "$ffmpeg_probe" >&2
   exit 1
 fi
+cat >"$workdir/mock-e2e-run.yaml" <<'YAML'
+apiVersion: kubereel.io/v1alpha1
+kind: VideoRun
+metadata:
+  name: mock-e2e-video-run
+  namespace: kubereel-test
+spec:
+  workflowRef: sample
+  workflowSnapshot:
+    steps:
+      - name: script
+        type: llm
+        providerRef: mock
+        timeoutSeconds: 60
+      - name: image-1
+        type: image
+        providerRef: mock
+        dependsOn: [script]
+        timeoutSeconds: 60
+      - name: image-2
+        type: image
+        providerRef: mock
+        dependsOn: [script]
+        timeoutSeconds: 60
+      - name: video-1
+        type: video
+        providerRef: mock
+        dependsOn: [image-1]
+        timeoutSeconds: 60
+      - name: video-2
+        type: video
+        providerRef: mock
+        dependsOn: [image-2]
+        timeoutSeconds: 60
+      - name: render
+        type: ffmpeg
+        dependsOn: [video-1, video-2]
+        timeoutSeconds: 60
+        ffmpeg:
+          operation: render_mp4
+          aspectRatio: "9:16"
+          fps: 24
+    outputs:
+      - name: final-video
+        from: render
+  inputs:
+    topic: {stringValue: "Unknown creatures in the forest"}
+    style: {stringValue: "Found footage horror"}
+YAML
+kubectl --kubeconfig "$kubeconfig" apply -f "$workdir/mock-e2e-run.yaml"
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test wait --for=jsonpath='{.status.phase}'=Succeeded videorun/mock-e2e-video-run --timeout=180s
+e2e_render_job=$(kubectl --kubeconfig "$kubeconfig" -n kubereel-test get videorun mock-e2e-video-run -o jsonpath='{.status.steps[5].jobName}')
+e2e_render_id=$(printf '%s' "$e2e_render_job" | sed 's/^kubereel-//;s/-render$//')
+e2e_mp4_probe=$(kubectl --kubeconfig "$kubeconfig" -n kubereel-test exec deployment/kubereel-kubereel -- ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height -of csv=p=0 "/data/workflows/$e2e_render_id/output.mp4")
+if [ "$e2e_mp4_probe" != "h264,720,1280" ]; then
+  printf 'unexpected Mock E2E MP4 stream: %s\n' "$e2e_mp4_probe" >&2
+  exit 1
+fi
 cat >"$workdir/cancel-run.yaml" <<'YAML'
 apiVersion: kubereel.io/v1alpha1
 kind: VideoRun
@@ -485,10 +543,11 @@ while time.monotonic() < deadline:
         raise RuntimeError(workflow.get('error', 'workflow failed'))
     if workflow['status'] == 'succeeded':
         with urllib.request.urlopen(base + '/api/workflows/' + workflow_id + '/artifact', timeout=5) as response:
+            content_type = response.headers.get('Content-Type', '')
             artifact = response.read()
-        if b'KubeReel mock workflow' not in artifact:
-            raise RuntimeError('artifact did not contain the prompt')
-        print('Mock workflow and SVG artifact verified')
+        if content_type != 'video/mp4' or len(artifact) < 24 or artifact[4:8] != b'ftyp':
+            raise RuntimeError(f'unexpected MP4 artifact: type={content_type}, len={len(artifact)}')
+        print('Mock workflow and MP4 artifact verified')
         break
     time.sleep(2)
 else:
@@ -510,8 +569,9 @@ while time.monotonic() < deadline:
         raise RuntimeError(workflow.get('error', 'UI workflow failed'))
     if workflow['status'] == 'succeeded':
         with urllib.request.urlopen(base + '/workflows/' + ui_id, timeout=5) as response:
-            if b'Download mock SVG' not in response.read():
-                raise RuntimeError('completed UI workflow has no artifact link')
+            body = response.read()
+            if b'Download mock MP4' not in body or b'<video' not in body:
+                raise RuntimeError('completed UI workflow has no MP4 player or download link')
         print('Mock workflow UI verified')
         break
     time.sleep(2)

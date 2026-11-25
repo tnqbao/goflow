@@ -8,7 +8,7 @@ templ MockWorkflowForm(message string) {
    <div>
     <p class="eyebrow">Mock provider</p>
     <h1>Mock workflow</h1>
-    <p class="page-description">Create a test SVG without external credentials or AI credits.</p>
+    <p class="page-description">Generate a sample MP4 video without external credentials or AI credits.</p>
    </div>
   </header>
   if message != "" {
@@ -33,7 +33,8 @@ templ MockWorkflowStatus(item workflow.Workflow) {
   <p><strong>Status:</strong> { item.Status }</p>
   <p><strong>Scene:</strong> { item.Prompt }</p>
   if item.Status == "succeeded" {
-   <p><a href={ templ.SafeURL("/api/workflows/" + item.ID + "/artifact") }>Download mock SVG</a></p>
+   <video controls preload="metadata" width="640" src={ string(templ.SafeURL("/api/workflows/" + item.ID + "/artifact")) }></video>
+   <p><a href={ templ.SafeURL("/api/workflows/" + item.ID + "/artifact") }>Download mock MP4</a></p>
   } else if item.Status == "failed" {
    <p role="alert">{ item.Error }</p>
   } else {

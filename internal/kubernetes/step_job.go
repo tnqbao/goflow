@@ -152,15 +152,33 @@ func stepJobForStep(runName string, uid types.UID, step executableStep, attempt 
 		return StepRenderJob(runName, uid, step.Name, attempt, cfg)
 	}
 
-	return StepJob(runName, uid, step.Name, attempt, cfg)
+	return buildOwnedStepJob(
+		runName,
+		uid,
+		step.Name,
+		attempt,
+		StageWorker,
+		"request.json",
+		stepOutputFile(step.Type),
+		cfg,
+	)
 }
 
 func stepOutputArtifactKey(step executableStep, workflowID string) string {
-	if step.Type == "ffmpeg" {
-		return path.Join("workflows", workflowID, "output.mp4")
-	}
+	return path.Join("workflows", workflowID, stepOutputFile(step.Type))
+}
 
-	return path.Join("workflows", workflowID, "scene.svg")
+func stepOutputFile(stepType string) string {
+	switch stepType {
+	case "llm":
+		return "script.json"
+	case "video":
+		return "clip.mp4"
+	case "ffmpeg":
+		return "output.mp4"
+	default:
+		return "scene.svg"
+	}
 }
 
 func buildOwnedStepJob(

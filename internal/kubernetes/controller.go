@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"path"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/tnqbao/kubereel/internal/mock"
+	"github.com/tnqbao/kubereel/internal/renderer"
 	"github.com/tnqbao/kubereel/internal/storage"
 	"github.com/tnqbao/kubereel/internal/workflow"
 	batchv1 "k8s.io/api/batch/v1"
@@ -159,7 +161,7 @@ func (c *Controller) reconcileWorkflow(ctx context.Context, wf workflow.Workflow
 }
 
 func (c *Controller) completeWorkflow(ctx context.Context, workflowID string) error {
-	outputPath := filepath.Join("workflows", workflowID, "final.svg")
+	outputPath := filepath.Join("workflows", workflowID, "final.mp4")
 
 	failureReason, err := c.checkRenderedArtifact(ctx, outputPath)
 	if err != nil {
@@ -177,20 +179,23 @@ func (c *Controller) completeWorkflow(ctx context.Context, workflowID string) er
 }
 
 func (c *Controller) checkRenderedArtifact(ctx context.Context, outputPath string) (string, error) {
-	object, err := c.Artifacts.Open(ctx, outputPath)
+	key := filepath.ToSlash(outputPath)
+	object, err := c.Artifacts.Open(ctx, key)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "render output is missing", nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("inspect render output: %w", err)
 	}
-
-	info, statErr := object.Stat()
-	if err := errors.Join(statErr, object.Close()); err != nil {
-		return "", fmt.Errorf("inspect render output: %w", err)
+	if closeErr := object.Close(); closeErr != nil {
+		return "", fmt.Errorf("inspect render output: %w", closeErr)
 	}
 
-	if info.Size() == 0 {
+	err = renderer.ValidateMP4(ctx, c.Artifacts, key)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return "", err
+	}
+	if err != nil {
 		return "render output is invalid", nil
 	}
 
@@ -198,7 +203,7 @@ func (c *Controller) checkRenderedArtifact(ctx context.Context, outputPath strin
 }
 
 func (c *Controller) startWorkflow(ctx context.Context, wf workflow.Workflow) error {
-	if err := publishMockRequest(ctx, c.Artifacts, wf.ID, wf.Prompt); err != nil {
+	if err := publishDemoWorkflowSpecs(ctx, c.Artifacts, wf.ID, wf.Prompt); err != nil {
 		return err
 	}
 
@@ -320,19 +325,36 @@ func validateJobIdentity(actual, expected *batchv1.Job) error {
 	return nil
 }
 
-func publishMockRequest(ctx context.Context, artifacts storage.Store, workflowID, prompt string) error {
+func publishDemoWorkflowSpecs(ctx context.Context, artifacts storage.Store, workflowID, prompt string) error {
 	if !workflowIDPattern.MatchString(workflowID) {
 		return fmt.Errorf("invalid workflow ID")
 	}
 
-	payload, err := json.Marshal(mock.Request{Prompt: prompt})
+	workerPayload, err := json.Marshal(mock.Request{Type: mock.StepVideo, Prompt: prompt})
 	if err != nil {
 		return fmt.Errorf("encode workflow request: %w", err)
 	}
 
-	requestKey := filepath.ToSlash(filepath.Join("workflows", workflowID, "request.json"))
-	if err := artifacts.Put(ctx, requestKey, bytes.NewReader(payload)); err != nil {
+	requestKey := path.Join("workflows", workflowID, "request.json")
+	if err := artifacts.Put(ctx, requestKey, bytes.NewReader(workerPayload)); err != nil {
 		return fmt.Errorf("publish workflow request: %w", err)
+	}
+
+	renderSpec := renderer.Request{
+		Operation: renderer.OpRenderMP4,
+		Inputs:    []string{path.Join("workflows", workflowID, "clip.mp4")},
+		Width:     1280,
+		Height:    720,
+		FPS:       24,
+	}
+	renderPayload, err := json.Marshal(renderSpec)
+	if err != nil {
+		return fmt.Errorf("encode render request: %w", err)
+	}
+
+	renderKey := path.Join("workflows", workflowID, "render.json")
+	if err := artifacts.Put(ctx, renderKey, bytes.NewReader(renderPayload)); err != nil {
+		return fmt.Errorf("publish render request: %w", err)
 	}
 
 	return nil

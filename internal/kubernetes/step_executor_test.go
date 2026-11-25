@@ -504,3 +504,136 @@ func TestCancelRunningFFmpegStep(t *testing.T) {
 		t.Fatalf("status = %v, Jobs = %d", got.Object["status"], len(jobs.jobs))
 	}
 }
+
+func TestStepExecutorEndToEndMockWorkflowDAG(t *testing.T) {
+	ctx := context.Background()
+	steps := []interface{}{
+		map[string]interface{}{"name": "script", "type": "llm", "providerRef": "mock"},
+		map[string]interface{}{"name": "image-1", "type": "image", "providerRef": "mock", "dependsOn": []interface{}{"script"}},
+		map[string]interface{}{"name": "image-2", "type": "image", "providerRef": "mock", "dependsOn": []interface{}{"script"}},
+		map[string]interface{}{"name": "video-1", "type": "video", "providerRef": "mock", "dependsOn": []interface{}{"image-1"}},
+		map[string]interface{}{"name": "video-2", "type": "video", "providerRef": "mock", "dependsOn": []interface{}{"image-2"}},
+		map[string]interface{}{
+			"name":      "render",
+			"type":      "ffmpeg",
+			"dependsOn": []interface{}{"video-1", "video-2"},
+			"ffmpeg": map[string]interface{}{
+				"operation":   renderer.OpRenderMP4,
+				"aspectRatio": "9:16",
+			},
+		},
+	}
+
+	run := testVideoRun(steps)
+	run.SetUID(types.UID("abcdef01-2345-6789-abcd-ef0123456789"))
+	spec := run.Object["spec"].(map[string]interface{})
+	spec["inputs"] = map[string]interface{}{
+		"topic": map[string]interface{}{"stringValue": "Unknown creatures in the forest"},
+		"style": map[string]interface{}{"stringValue": "Found footage horror"},
+	}
+	spec["workflowSnapshot"].(map[string]interface{})["outputs"] = []interface{}{
+		map[string]interface{}{"name": "final-video", "from": "render"},
+	}
+
+	controller, jobs := testStepController(t, run, 4)
+
+	// 1. Submit and execute the Mock LLM script step.
+	reconcileTimes(t, controller, 2)
+	if len(jobs.jobs) != 1 {
+		t.Fatalf("Jobs after script submit = %d, want 1", len(jobs.jobs))
+	}
+	for _, job := range jobs.jobs {
+		id := job.Labels["kubereel.io/workflow"]
+		dir := filepath.ToSlash(filepath.Join("workflows", id))
+		if err := mock.Execute(ctx, controller.Executor.Artifacts, dir+"/request.json", dir+"/script.json"); err != nil {
+			t.Fatal(err)
+		}
+		jobs.finish(id, StageWorker, batchv1.JobComplete)
+	}
+
+	// 2. Both independent Mock image steps become ready and submit concurrently.
+	reconcileTimes(t, controller, 5)
+	activeImageJobs := 0
+	for _, job := range jobs.jobs {
+		if !isJobTerminal(job) {
+			activeImageJobs++
+			id := job.Labels["kubereel.io/workflow"]
+			dir := filepath.ToSlash(filepath.Join("workflows", id))
+			if err := mock.Execute(ctx, controller.Executor.Artifacts, dir+"/request.json", dir+"/scene.svg"); err != nil {
+				t.Fatal(err)
+			}
+			jobs.finish(id, StageWorker, batchv1.JobComplete)
+		}
+	}
+	if activeImageJobs != 2 {
+		t.Fatalf("concurrent image Jobs = %d, want 2", activeImageJobs)
+	}
+
+	// 3. Both independent Mock video steps become ready and submit concurrently.
+	reconcileTimes(t, controller, 6)
+	activeVideoJobs := 0
+	for _, job := range jobs.jobs {
+		if !isJobTerminal(job) {
+			activeVideoJobs++
+			id := job.Labels["kubereel.io/workflow"]
+			dir := filepath.ToSlash(filepath.Join("workflows", id))
+			if err := controller.Executor.Artifacts.Put(ctx, dir+"/clip.mp4", bytes.NewReader(testValidMP4())); err != nil {
+				t.Fatal(err)
+			}
+			jobs.finish(id, StageWorker, batchv1.JobComplete)
+		}
+	}
+	if activeVideoJobs != 2 {
+		t.Fatalf("concurrent video Jobs = %d, want 2", activeVideoJobs)
+	}
+
+	// 4. Final FFmpeg render step resolves both upstream video clips and completes the run.
+	reconcileTimes(t, controller, 5)
+	var renderJob *batchv1.Job
+	for _, job := range jobs.jobs {
+		if !isJobTerminal(job) {
+			renderJob = job
+		}
+	}
+	if renderJob == nil || renderJob.Labels["kubereel.io/stage"] != StageRender {
+		t.Fatalf("expected active render Job, got %+v", renderJob)
+	}
+
+	renderID := renderJob.Labels["kubereel.io/workflow"]
+	renderDir := filepath.ToSlash(filepath.Join("workflows", renderID))
+	specObj, err := controller.Executor.Artifacts.Open(ctx, renderDir+"/render.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawSpec, err := io.ReadAll(specObj)
+	_ = specObj.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resolved renderer.Request
+	if err := json.Unmarshal(rawSpec, &resolved); err != nil {
+		t.Fatal(err)
+	}
+	if len(resolved.Inputs) != 2 || resolved.AspectRatio != "9:16" {
+		t.Fatalf("resolved FFmpeg request = %+v", resolved)
+	}
+
+	if err := controller.Executor.Artifacts.Put(ctx, renderDir+"/output.mp4", bytes.NewReader(testValidMP4())); err != nil {
+		t.Fatal(err)
+	}
+	jobs.finish(renderID, StageRender, batchv1.JobComplete)
+	reconcileTimes(t, controller, 1)
+
+	got, err := controller.Runs.Get(ctx, "sample", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	phase, _, _ := unstructured.NestedString(got.Object, "status", "phase")
+	artifacts, _, _ := unstructured.NestedStringSlice(got.Object, "status", "artifacts")
+	if phase != "Succeeded" || len(artifacts) != 6 {
+		t.Fatalf("final status = %v", got.Object["status"])
+	}
+	if err := controller.Executor.cleanupArtifacts(ctx, got, time.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("cleanupArtifacts = %v", err)
+	}
+}

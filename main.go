@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -106,18 +105,10 @@ func runTask(ctx context.Context, command, inputPath, outputPath string, cfg con
 	}
 
 	if command == kubernetes.StageWorker {
-		return mock.Generate(ctx, artifacts, inputKey, outputKey)
-	}
-
-	if isLegacySVGRender(inputKey, outputKey) {
-		return mock.Render(ctx, artifacts, inputKey, outputKey)
+		return mock.Execute(ctx, artifacts, inputKey, outputKey)
 	}
 
 	return renderer.New().RenderFile(ctx, artifacts, inputKey, outputKey)
-}
-
-func isLegacySVGRender(inputKey, outputKey string) bool {
-	return strings.HasSuffix(inputKey, ".svg") && strings.HasSuffix(outputKey, ".svg")
 }
 
 func runServer(ctx context.Context, cfg config.Config) (runErr error) {

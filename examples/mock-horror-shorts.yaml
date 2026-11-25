@@ -1,0 +1,104 @@
+apiVersion: kubereel.io/v1alpha1
+kind: VideoWorkflow
+metadata:
+  name: horror-shorts
+spec:
+  description: End-to-end Mock Provider + FFmpeg vertical shorts workflow
+  inputs:
+    - name: topic
+      type: string
+      required: true
+    - name: style
+      type: string
+  steps:
+    - name: script
+      type: llm
+      providerRef: mock
+      timeoutSeconds: 60
+    - name: scene-1-image
+      type: image
+      providerRef: mock
+      dependsOn: [script]
+      timeoutSeconds: 60
+    - name: scene-2-image
+      type: image
+      providerRef: mock
+      dependsOn: [script]
+      timeoutSeconds: 60
+    - name: scene-1-video
+      type: video
+      providerRef: mock
+      dependsOn: [scene-1-image]
+      timeoutSeconds: 60
+    - name: scene-2-video
+      type: video
+      providerRef: mock
+      dependsOn: [scene-2-image]
+      timeoutSeconds: 60
+    - name: render
+      type: ffmpeg
+      dependsOn: [scene-1-video, scene-2-video]
+      timeoutSeconds: 120
+      ffmpeg:
+        operation: render_mp4
+        aspectRatio: "9:16"
+        fps: 24
+  outputs:
+    - name: final-video
+      from: render
+---
+apiVersion: kubereel.io/v1alpha1
+kind: VideoRun
+metadata:
+  name: horror-shorts-demo
+spec:
+  workflowRef: horror-shorts
+  inputs:
+    topic:
+      stringValue: "Unknown creatures in the forest"
+    style:
+      stringValue: "Found footage horror"
+  workflowSnapshot:
+    description: End-to-end Mock Provider + FFmpeg vertical shorts workflow
+    inputs:
+      - name: topic
+        type: string
+        required: true
+      - name: style
+        type: string
+    steps:
+      - name: script
+        type: llm
+        providerRef: mock
+        timeoutSeconds: 60
+      - name: scene-1-image
+        type: image
+        providerRef: mock
+        dependsOn: [script]
+        timeoutSeconds: 60
+      - name: scene-2-image
+        type: image
+        providerRef: mock
+        dependsOn: [script]
+        timeoutSeconds: 60
+      - name: scene-1-video
+        type: video
+        providerRef: mock
+        dependsOn: [scene-1-image]
+        timeoutSeconds: 60
+      - name: scene-2-video
+        type: video
+        providerRef: mock
+        dependsOn: [scene-2-image]
+        timeoutSeconds: 60
+      - name: render
+        type: ffmpeg
+        dependsOn: [scene-1-video, scene-2-video]
+        timeoutSeconds: 120
+        ffmpeg:
+          operation: render_mp4
+          aspectRatio: "9:16"
+          fps: 24
+    outputs:
+      - name: final-video
+        from: render

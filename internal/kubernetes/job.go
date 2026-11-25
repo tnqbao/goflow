@@ -138,13 +138,12 @@ func isValidArtifactConfig(cfg *ArtifactConfig) bool {
 
 func stageArtifactPaths(workflowID, stage string) (string, string) {
 	workflowDir := path.Join(dataMountPath, "workflows", workflowID)
-	scenePath := path.Join(workflowDir, "scene.svg")
 
 	if stage == StageRender {
-		return scenePath, path.Join(workflowDir, "final.svg")
+		return path.Join(workflowDir, "render.json"), path.Join(workflowDir, "final.mp4")
 	}
 
-	return path.Join(workflowDir, "request.json"), scenePath
+	return path.Join(workflowDir, "request.json"), path.Join(workflowDir, "clip.mp4")
 }
 
 func buildJobPodTemplate(workflowID, stage, inputPath, outputPath string, cfg JobConfig) corev1.PodTemplateSpec {

@@ -45,6 +45,21 @@ func TestMockWorkflowUI(t *testing.T) {
 		t.Fatalf("status: %d %s", statusResp.Code, statusResp.Body.String())
 	}
 
+	workflowID := strings.TrimPrefix(createdResp.Header().Get("Location"), "/workflows/")
+	store := workflow.NewStore(db)
+	if err := store.Transition(context.Background(), workflowID, "queued", "running", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Transition(context.Background(), workflowID, "running", "succeeded", "workflows/"+workflowID+"/final.mp4", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	doneResp := httptest.NewRecorder()
+	mux.ServeHTTP(doneResp, httptest.NewRequest(http.MethodGet, createdResp.Header().Get("Location"), nil))
+	if doneResp.Code != http.StatusOK || !strings.Contains(doneResp.Body.String(), "Download mock MP4") || !strings.Contains(doneResp.Body.String(), "<video") {
+		t.Fatalf("completed status: %d %s", doneResp.Code, doneResp.Body.String())
+	}
+
 	invalidReq := httptest.NewRequest(http.MethodPost, "/workflows", strings.NewReader("prompt="))
 	invalidReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 

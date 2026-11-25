@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 )
 
-const downloadSVGFilename = "mock-scene.svg"
+const downloadMP4Filename = "mock-video.mp4"
 
 func (h Handler) downloadArtifact(w http.ResponseWriter, r *http.Request) {
 	wf, ok := h.findWorkflow(w, r)
@@ -14,7 +14,7 @@ func (h Handler) downloadArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expectedPath := filepath.Join("workflows", wf.ID, "final.svg")
+	expectedPath := filepath.Join("workflows", wf.ID, "final.mp4")
 	if wf.Status != "succeeded" || wf.Result != expectedPath {
 		http.Error(w, "artifact not available", http.StatusNotFound)
 		return
@@ -42,7 +42,7 @@ func (h Handler) downloadArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "image/svg+xml")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+downloadSVGFilename+`"`)
-	http.ServeContent(w, r, downloadSVGFilename, info.ModTime(), object)
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+downloadMP4Filename+`"`)
+	http.ServeContent(w, r, downloadMP4Filename, info.ModTime(), object)
 }

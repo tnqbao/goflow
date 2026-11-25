@@ -35,7 +35,7 @@ Forward the service port locally:
 kubectl -n kubereel port-forward service/kubereel-kubereel 8080:8080
 ```
 
-- **Web UI:** Open `http://localhost:8080/workflows` to run the built-in Mock workflow.
+- **Web UI:** Open `http://localhost:8080/workflows` to run the built-in Mock workflow and preview/download the rendered MP4.
 - **Health checks:** `http://localhost:8080/healthz` and `http://localhost:8080/readyz`.
 - **API test:**
 
@@ -45,7 +45,14 @@ curl -i -X POST http://localhost:8080/api/workflows \
   -d '{"prompt":"A quiet lake"}'
 
 curl http://localhost:8080/api/workflows/<WORKFLOW_ID>
-curl -o mock-scene.svg http://localhost:8080/api/workflows/<WORKFLOW_ID>/artifact
+curl -o mock-video.mp4 http://localhost:8080/api/workflows/<WORKFLOW_ID>/artifact
+```
+
+- **Multi-step DAG (`VideoWorkflow` + `VideoRun`):**
+
+```sh
+kubectl -n kubereel apply -f examples/mock-horror-shorts.yaml
+kubectl -n kubereel get videorun horror-shorts-demo -w
 ```
 
 ### Common Helm Values
@@ -140,5 +147,5 @@ python3 charts/kubereel/tests/test_chart.py
 
 ## Current Status & Limitations
 
-- The `mock` provider is enabled out of the box (no API keys required). Real provider integrations (Gemini, fal.ai), the complete Mock end-to-end MP4 workflow, authentication, and the `/api/v1` contract are in active development.
-- Current `VideoRun` execution supports `image` steps (`providerRef: mock`, producing SVG artifacts) and `ffmpeg` steps (`merge`, `trim`, `resize`, `aspect_ratio`, `add_audio`, `normalize`, `render_mp4`, producing validated H.264 MP4 artifacts); failed Jobs retry up to `maxAttempts`, while missing/uncertain Jobs transition to `RequiresReview` rather than risking duplicate submission.
+- The `mock` provider and FFmpeg produce complete downloadable H.264 MP4 videos end-to-end without external API keys. Real provider integrations (Gemini, fal.ai), authentication, and the `/api/v1` contract are in active development.
+- `VideoRun` execution supports multi-step DAGs across `llm`, `image`, `video` (`providerRef: mock`) and `ffmpeg` (`merge`, `trim`, `resize`, `aspect_ratio`, `add_audio`, `normalize`, `render_mp4`), scheduling independent steps concurrently; failed Jobs retry up to `maxAttempts`, while missing/uncertain Jobs transition to `RequiresReview` rather than risking duplicate submission.
