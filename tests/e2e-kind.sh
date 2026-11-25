@@ -615,8 +615,63 @@ updated = workflow_request('PATCH', '/managed-definition', {'resourceVersion': v
 assert updated['spec']['steps'] == [good_step] and updated['spec']['description'] == 'updated'
 workflow_request('PATCH', '/managed-definition', {'resourceVersion': version, 'spec': {'description': 'stale'}}, expected=409)
 assert workflow_request('GET', '/managed-definition')['spec']['description'] == 'updated'
+# Submit the persisted definition, inspect results and logs, then retry a failed run.
+def run_request(method, path, payload=None, expected=200):
+    request = urllib.request.Request(
+        base + '/api/v1' + path,
+        data=None if payload is None else json.dumps(payload).encode(),
+        method=method, headers={**auth_headers, 'Content-Type': 'application/json'},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            assert response.status == expected
+            return json.load(response)
+    except urllib.error.HTTPError as error:
+        if error.code != expected:
+            raise RuntimeError(f'execution API {method} {path}: {error.code} {error.read()}') from error
+
+def wait_run(path, phase):
+    deadline = time.monotonic() + 75
+    while time.monotonic() < deadline:
+        run = run_request('GET', path)
+        if run['phase'] == phase:
+            return run
+        if run['phase'] in ['Succeeded', 'Failed', 'RequiresReview', 'Cancelled']:
+            raise RuntimeError(f'unexpected execution state: {run}')
+        time.sleep(1)
+    raise RuntimeError(f'run did not reach {phase}: {path}')
+
+launch = '/workflows/managed-definition/runs'
+run = run_request('POST', launch, {'inputs': {'prompt': {'stringValue': 'Mock via run API'}}}, 202)
+run_path = '/runs/' + run['id']
+assert run['workflowId'] == 'managed-definition'
+assert run_request('GET', '/runs?limit=1')['items']
+completed = wait_run(run_path, 'Succeeded')
+assert completed['steps'][0]['name'] == 'image'
+assert len(run_request('GET', run_path + '/artifacts')['items']) == 1
+assert run_request('GET', run_path + '/logs?step=image&tailLines=10')['step'] == 'image'
+run_request('POST', run_path + '/cancel', expected=409)
+run_request('POST', run_path + '/retry', {}, 409)
+failed = run_request('POST', launch, {}, 202)
+failed_path = '/runs/' + failed['id']
+wait_run(failed_path, 'Failed')
+retry = run_request('POST', failed_path + '/retry', {}, 202)
+assert retry['id'] != failed['id']
+assert run_request('POST', failed_path + '/retry', {}, 202)['id'] == retry['id']
+
+# An input node keeps this run pending until the cancellation request is reconciled.
+workflow_request('POST', payload={'id': 'cancellable-definition', 'spec': {
+    'steps': [{'name': 'input', 'type': 'input'}],
+}}, expected=201)
+cancellable = run_request('POST', '/workflows/cancellable-definition/runs', {}, 202)
+cancel_path = '/runs/' + cancellable['id']
+run_request('POST', cancel_path + '/cancel', expected=202)
+wait_run(cancel_path, 'Cancelled')
+workflow_request('DELETE', '/cancellable-definition', expected=204)
+
 workflow_request('DELETE', '/managed-definition', expected=204)
 workflow_request('GET', '/managed-definition', expected=404)
+assert run_request('GET', run_path)['phase'] == 'Succeeded'
 
 # 3. Verify authenticated API workflow execution and protected MP4 artifact download.
 providers_req = urllib.request.Request(base + '/api/providers', headers=auth_headers)

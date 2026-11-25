@@ -38,6 +38,7 @@ type Jobs interface {
 
 // Controller reconciles durable workflow executions and runs the VideoRun controller.
 type Controller struct {
+	ExecutionRepository *repository.ExecutionRepository
 	WorkflowDefinitions *repository.WorkflowDefinitionRepository
 	ProviderRepository  *repository.ProviderRepository
 	Workflows           *service.WorkflowService

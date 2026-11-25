@@ -174,3 +174,11 @@ For an existing Helm installation, apply the updated CRD before upgrading the ch
 The authenticated [Workflow API](docs/workflow-api.yaml) manages reusable VideoWorkflow definitions in Kubernetes mode. POST accepts a Kubernetes resource name as `id` and the workflow definition as `spec`. GET returns that spec for export and accepts `limit` and `continue` on the list. PATCH takes only the fields to change under `spec`. Arrays replace the corresponding whole field. Include the returned `resourceVersion` to detect edits made since the definition was read.
 
 Deleting a definition preserves existing runs and their workflow snapshots. For browser writes, send the session's CSRF token. Scripted clients can authenticate with a Bearer token.
+
+### Execution management
+
+The authenticated [Execution API](docs/execution-api.yaml) starts runs from stored VideoWorkflow definitions in Kubernetes mode. POST to `/api/v1/workflows/{id}/runs` with typed inputs and poll the run URL in the `Location` response header. The run keeps the workflow snapshot and input values used at launch.
+
+Cancel requests are reconciled by the operator. A retry starts the entire snapshot in a new run once a failed or cancelled run has no active work. Repeating a retry request for the same source run returns its existing retry. Runs marked `RequiresReview` must be investigated before starting new work. Runs referencing providers other than the built-in Mock require `allowPaid: true` on both launch and retry.
+
+A run exposes its step status and recorded artifact keys. The log endpoint reads a bounded tail from a recorded step Job while its Pod logs remain available.

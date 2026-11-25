@@ -1,0 +1,211 @@
+openapi: 3.0.3
+info:
+  title: KubeReel Execution Management API
+  version: "1"
+servers:
+  - url: /api/v1
+security:
+  - bearer: []
+  - session: []
+    csrf: []
+paths:
+  /workflows/{id}/runs:
+    parameters:
+      - {$ref: "#/components/parameters/ID"}
+    post:
+      summary: Start a run from a stored workflow definition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                inputs:
+                  type: object
+                  description: Input names mapped to typed values such as prompt with stringValue.
+                  additionalProperties:
+                    $ref: "../charts/kubereel/crds/kubereel.io_videoruns.yaml#/spec/versions/0/schema/openAPIV3Schema/properties/spec/properties/inputs/additionalProperties"
+                maxConcurrentSteps: {type: integer, minimum: 1, maximum: 100}
+                allowPaid: {$ref: "#/components/schemas/AllowPaid"}
+            example:
+              inputs:
+                prompt: {stringValue: A quiet lake}
+      responses:
+        "202": {$ref: "#/components/responses/Accepted"}
+        default: {$ref: "#/components/responses/Error"}
+  /runs:
+    get:
+      summary: List runs in the installation namespace
+      security: [{bearer: []}, {session: []}]
+      parameters:
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+        - name: continue
+          in: query
+          schema: {type: string, maxLength: 4096}
+      responses:
+        "200":
+          description: Run page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/Run"}
+                  continue: {type: string}
+        "410": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+  /runs/{id}:
+    parameters:
+      - {$ref: "#/components/parameters/ID"}
+    get:
+      summary: Get run and step status
+      security: [{bearer: []}, {session: []}]
+      responses:
+        "200":
+          description: Current run status
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Run"}
+        default: {$ref: "#/components/responses/Error"}
+  /runs/{id}/cancel:
+    parameters:
+      - {$ref: "#/components/parameters/ID"}
+    post:
+      summary: Request cancellation of pending or running execution
+      responses:
+        "202": {$ref: "#/components/responses/Accepted"}
+        "409": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+  /runs/{id}/retry:
+    parameters:
+      - {$ref: "#/components/parameters/ID"}
+    post:
+      summary: Retry a settled failed or cancelled execution using its snapshot
+      description: Repeated requests for the same source run return the same retry run.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                allowPaid: {$ref: "#/components/schemas/AllowPaid"}
+      responses:
+        "202": {$ref: "#/components/responses/Accepted"}
+        "409": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+  /runs/{id}/logs:
+    parameters:
+      - {$ref: "#/components/parameters/ID"}
+    get:
+      summary: Get a bounded log tail for the latest recorded Job of a step
+      security: [{bearer: []}, {session: []}]
+      parameters:
+        - name: step
+          in: query
+          description: Defaults to the last step with a recorded Job in plan order.
+          schema: {type: string}
+        - name: tailLines
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 1000, default: 100}
+      responses:
+        "200":
+          description: Up to 64 KiB of text from the step container
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [step, text]
+                properties:
+                  step: {type: string}
+                  text: {type: string}
+        "404": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+  /runs/{id}/artifacts:
+    parameters:
+      - {$ref: "#/components/parameters/ID"}
+    get:
+      summary: List artifact references recorded for a run
+      security: [{bearer: []}, {session: []}]
+      responses:
+        "200":
+          description: Recorded artifact keys. Retention can remove the underlying files.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+components:
+  securitySchemes:
+    bearer: {type: http, scheme: bearer}
+    session: {type: apiKey, in: cookie, name: kubereel_session}
+    csrf: {type: apiKey, in: header, name: X-CSRF-Token}
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string}
+  schemas:
+    AllowPaid:
+      type: boolean
+      default: false
+      description: Required when any step names a provider other than the built-in Mock.
+    Phase:
+      type: string
+      enum: [Pending, Running, Succeeded, Failed, Cancelling, Cancelled, RequiresReview]
+    Run:
+      type: object
+      required: [id, workflowId, phase, createdAt, cancelRequested, steps]
+      properties:
+        id: {type: string}
+        workflowId: {type: string}
+        phase: {$ref: "#/components/schemas/Phase"}
+        createdAt: {type: string, format: date-time}
+        cancelRequested: {type: boolean}
+        startedAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time}
+        error: {type: string}
+        steps:
+          type: array
+          items:
+            type: object
+            required: [name, phase, attempts]
+            properties:
+              name: {type: string}
+              phase: {$ref: "#/components/schemas/Phase"}
+              attempts: {type: integer}
+              startedAt: {type: string, format: date-time}
+              completedAt: {type: string, format: date-time}
+              error: {type: string}
+  responses:
+    Accepted:
+      description: Operation accepted. Poll Location for current status.
+      headers:
+        Location:
+          schema: {type: string}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Run"}
+    Error:
+      description: Authentication, validation, run state, or persistence error
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error, message]
+            properties:
+              error: {type: string}
+              message: {type: string}

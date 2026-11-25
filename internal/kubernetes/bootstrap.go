@@ -23,7 +23,7 @@ const clusterProbeTimeout = 10 * time.Second
 
 type clusterClients struct {
 	workflows dynamic.ResourceInterface
-	jobs      Jobs
+	jobs      batchclient.JobInterface
 	core      coreclient.CoreV1Interface
 	runs      dynamic.ResourceInterface
 	providers dynamic.ResourceInterface
@@ -68,6 +68,7 @@ func NewControllerFromCluster(
 	}
 
 	return &Controller{
+		ExecutionRepository: repository.NewExecutionRepository(clients.runs, clients.jobs, clients.core.Pods(cfg.Kubernetes.Namespace)),
 		WorkflowDefinitions: repository.NewWorkflowDefinitionRepository(clients.workflows),
 		ProviderRepository:  repository.NewProviderRepository(clients.providers, clients.core.Secrets(cfg.Kubernetes.Namespace)),
 		Workflows:           workflows,
