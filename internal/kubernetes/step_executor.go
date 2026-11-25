@@ -14,8 +14,8 @@ import (
 
 	"github.com/tnqbao/kubereel/internal/mock"
 	"github.com/tnqbao/kubereel/internal/renderer"
+	"github.com/tnqbao/kubereel/internal/service"
 	"github.com/tnqbao/kubereel/internal/storage"
-	"github.com/tnqbao/kubereel/internal/workflow"
 	batchv1 "k8s.io/api/batch/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,7 +30,7 @@ const maxPromptBytes = 8192
 type StepExecutor struct {
 	Runs          dynamic.ResourceInterface
 	Jobs          Jobs
-	Store         *workflow.Store
+	Workflows     *service.WorkflowService
 	Config        JobConfig
 	Artifacts     storage.Store
 	MaxConcurrent int
@@ -129,7 +129,7 @@ func (e *StepExecutor) Reconcile(
 }
 
 func (e *StepExecutor) validateConfig() error {
-	if e.Runs == nil || e.Jobs == nil || e.Store == nil || e.JobLock == nil || e.Artifacts == nil || e.MaxConcurrent < 1 {
+	if e.Runs == nil || e.Jobs == nil || e.Workflows == nil || e.JobLock == nil || e.Artifacts == nil || e.MaxConcurrent < 1 {
 		return fmt.Errorf("invalid VideoRun executor configuration")
 	}
 
@@ -465,7 +465,7 @@ func publishStepPayload(ctx context.Context, artifacts storage.Store, workflowID
 }
 
 func (e *StepExecutor) hasAvailableJobSlot(ctx context.Context) (bool, error) {
-	activeWorkflows, err := e.Store.Active(ctx)
+	activeWorkflows, err := e.Workflows.Active(ctx)
 	if err != nil {
 		return false, err
 	}

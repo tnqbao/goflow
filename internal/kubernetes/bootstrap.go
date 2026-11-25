@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/tnqbao/kubereel/internal/config"
+	"github.com/tnqbao/kubereel/internal/service"
 	"github.com/tnqbao/kubereel/internal/storage"
-	"github.com/tnqbao/kubereel/internal/workflow"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
@@ -31,7 +31,7 @@ type clusterClients struct {
 func NewControllerFromCluster(
 	ctx context.Context,
 	cfg config.Config,
-	store *workflow.Store,
+	workflows *service.WorkflowService,
 	artifacts storage.Store,
 ) (*Controller, error) {
 	if !cfg.Kubernetes.Enabled {
@@ -56,7 +56,7 @@ func NewControllerFromCluster(
 	executor := &StepExecutor{
 		Runs:          clients.runs,
 		Jobs:          clients.jobs,
-		Store:         store,
+		Workflows:     workflows,
 		Config:        jobCfg,
 		Artifacts:     artifacts,
 		MaxConcurrent: cfg.Kubernetes.MaxConcurrentJobs,
@@ -64,7 +64,7 @@ func NewControllerFromCluster(
 	}
 
 	return &Controller{
-		Store:         store,
+		Workflows:     workflows,
 		Jobs:          clients.jobs,
 		Config:        jobCfg,
 		Artifacts:     artifacts,

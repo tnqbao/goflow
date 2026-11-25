@@ -15,6 +15,7 @@ import (
 
 	"github.com/tnqbao/kubereel/internal/mock"
 	"github.com/tnqbao/kubereel/internal/renderer"
+	"github.com/tnqbao/kubereel/internal/service"
 	"github.com/tnqbao/kubereel/internal/storage"
 	"github.com/tnqbao/kubereel/internal/workflow"
 	batchv1 "k8s.io/api/batch/v1"
@@ -36,7 +37,7 @@ type Jobs interface {
 
 // Controller reconciles durable workflow executions and runs the VideoRun controller.
 type Controller struct {
-	Store         *workflow.Store
+	Workflows     *service.WorkflowService
 	Jobs          Jobs
 	Config        JobConfig
 	Artifacts     storage.Store
@@ -74,7 +75,7 @@ func (c *Controller) Run(ctx context.Context) {
 
 // Reconcile advances queued and running workflows while respecting MaxConcurrent.
 func (c *Controller) Reconcile(ctx context.Context) error {
-	if c.Store == nil || c.Jobs == nil || c.Artifacts == nil || c.MaxConcurrent < 1 {
+	if c.Workflows == nil || c.Jobs == nil || c.Artifacts == nil || c.MaxConcurrent < 1 {
 		return fmt.Errorf("invalid workflow controller configuration")
 	}
 
@@ -88,7 +89,7 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 		return err
 	}
 
-	activeWorkflows, err := c.Store.Active(ctx)
+	activeWorkflows, err := c.Workflows.Active(ctx)
 	if err != nil {
 		return err
 	}
@@ -171,7 +172,7 @@ func (c *Controller) completeWorkflow(ctx context.Context, workflowID string) er
 		return c.failWorkflow(ctx, workflowID, failureReason)
 	}
 
-	if err := c.Store.Transition(ctx, workflowID, "running", "succeeded", outputPath, ""); err != nil {
+	if err := c.Workflows.Transition(ctx, workflowID, "running", "succeeded", outputPath, ""); err != nil {
 		return err
 	}
 
@@ -211,11 +212,11 @@ func (c *Controller) startWorkflow(ctx context.Context, wf workflow.Workflow) er
 		return err
 	}
 
-	return c.Store.Transition(ctx, wf.ID, "queued", "running", "", "")
+	return c.Workflows.Transition(ctx, wf.ID, "queued", "running", "", "")
 }
 
 func (c *Controller) failWorkflow(ctx context.Context, workflowID, reason string) error {
-	if err := c.Store.Transition(ctx, workflowID, "running", "failed", "", reason); err != nil {
+	if err := c.Workflows.Transition(ctx, workflowID, "running", "failed", "", reason); err != nil {
 		return err
 	}
 

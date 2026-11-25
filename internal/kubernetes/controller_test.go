@@ -12,7 +12,10 @@ import (
 
 	"github.com/tnqbao/kubereel/internal/database"
 	"github.com/tnqbao/kubereel/internal/mock"
+	"github.com/tnqbao/kubereel/internal/provider"
 	"github.com/tnqbao/kubereel/internal/renderer"
+	"github.com/tnqbao/kubereel/internal/repository"
+	"github.com/tnqbao/kubereel/internal/service"
 	"github.com/tnqbao/kubereel/internal/storage"
 	"github.com/tnqbao/kubereel/internal/workflow"
 	batchv1 "k8s.io/api/batch/v1"
@@ -97,13 +100,18 @@ func testController(t *testing.T) (*Controller, *testJobs) {
 		}
 	})
 	jobs := &testJobs{jobs: make(map[string]*batchv1.Job)}
-	return &Controller{Store: workflow.NewStore(db), Jobs: jobs, Config: JobConfig{Image: "test/image:v1", Claim: "data", Instance: "test"}, Artifacts: artifacts, MaxConcurrent: 1}, jobs
+	workflows := service.NewWorkflowService(
+		repository.NewWorkflowRepository(db),
+		artifacts,
+		service.NewProviderService(provider.NewManager()),
+	)
+	return &Controller{Workflows: workflows, Jobs: jobs, Config: JobConfig{Image: "test/image:v1", Claim: "data", Instance: "test"}, Artifacts: artifacts, MaxConcurrent: 1}, jobs
 }
 
 func TestReconcileMockWorkflow(t *testing.T) {
 	ctx := context.Background()
 	controller, jobs := testController(t)
-	w, err := controller.Store.Create(ctx, "test scene")
+	w, err := controller.Workflows.Create(ctx, "test scene", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +161,7 @@ func TestReconcileMockWorkflow(t *testing.T) {
 	if err := controller.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, err := controller.Store.Get(ctx, w.ID)
+	got, err := controller.Workflows.Get(ctx, w.ID)
 	if err != nil || got.Status != "succeeded" || got.Result != filepath.Join("workflows", w.ID, "final.mp4") {
 		t.Fatalf("workflow = %+v, %v", got, err)
 	}
@@ -164,7 +172,7 @@ func TestReconcileMockWorkflow(t *testing.T) {
 		t.Fatal("completed workflow jobs were not removed")
 	}
 
-	bad, err := controller.Store.Create(ctx, "corrupt render")
+	bad, err := controller.Workflows.Create(ctx, "corrupt render", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +191,7 @@ func TestReconcileMockWorkflow(t *testing.T) {
 	if err := controller.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	gotBad, err := controller.Store.Get(ctx, bad.ID)
+	gotBad, err := controller.Workflows.Get(ctx, bad.ID)
 	if err != nil || gotBad.Status != "failed" || gotBad.Error != "render output is invalid" {
 		t.Fatalf("corrupt workflow = %+v, %v", gotBad, err)
 	}
@@ -192,11 +200,11 @@ func TestReconcileMockWorkflow(t *testing.T) {
 func TestReconcileErrorsAndConcurrency(t *testing.T) {
 	ctx := context.Background()
 	controller, jobs := testController(t)
-	first, err := controller.Store.Create(ctx, "first")
+	first, err := controller.Workflows.Create(ctx, "first", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := controller.Store.Create(ctx, "second")
+	second, err := controller.Workflows.Create(ctx, "second", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +212,7 @@ func TestReconcileErrorsAndConcurrency(t *testing.T) {
 	if err := controller.Reconcile(ctx); err == nil {
 		t.Fatal("expected job creation failure")
 	}
-	got, err := controller.Store.Get(ctx, first.ID)
+	got, err := controller.Workflows.Get(ctx, first.ID)
 	if err != nil || got.Status != "queued" {
 		t.Fatalf("workflow = %+v, %v", got, err)
 	}
@@ -212,7 +220,7 @@ func TestReconcileErrorsAndConcurrency(t *testing.T) {
 	if err := controller.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, err = controller.Store.Get(ctx, second.ID)
+	got, err = controller.Workflows.Get(ctx, second.ID)
 	if err != nil || got.Status != "queued" {
 		t.Fatalf("concurrency limit not enforced: %+v, %v", got, err)
 	}
@@ -220,18 +228,18 @@ func TestReconcileErrorsAndConcurrency(t *testing.T) {
 	if err := controller.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, err = controller.Store.Get(ctx, first.ID)
+	got, err = controller.Workflows.Get(ctx, first.ID)
 	if err != nil || got.Status != "failed" {
 		t.Fatalf("failed job = %+v, %v", got, err)
 	}
 	if err := controller.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, err = controller.Store.Get(ctx, second.ID)
+	got, err = controller.Workflows.Get(ctx, second.ID)
 	if err != nil || got.Status != "running" {
 		t.Fatalf("next job = %+v, %v", got, err)
 	}
-	if err := controller.Store.Transition(ctx, second.ID, "queued", "running", "", ""); !errors.Is(err, workflow.ErrConflict) {
+	if err := controller.Workflows.Transition(ctx, second.ID, "queued", "running", "", ""); !errors.Is(err, workflow.ErrConflict) {
 		t.Fatalf("expected conflict: %v", err)
 	}
 }

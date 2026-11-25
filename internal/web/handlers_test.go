@@ -9,8 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/labstack/echo/v4"
 	"github.com/tnqbao/kubereel/internal/database"
-	"github.com/tnqbao/kubereel/internal/workflow"
+	"github.com/tnqbao/kubereel/internal/provider"
+	"github.com/tnqbao/kubereel/internal/repository"
+	"github.com/tnqbao/kubereel/internal/service"
 )
 
 func TestMockWorkflowUI(t *testing.T) {
@@ -20,11 +23,17 @@ func TestMockWorkflowUI(t *testing.T) {
 	}
 	defer db.Close()
 
-	mux := http.NewServeMux()
-	(WorkflowHandler{Store: workflow.NewStore(db)}).Register(mux)
+	workflowSvc := service.NewWorkflowService(
+		repository.NewWorkflowRepository(db),
+		nil,
+		service.NewProviderService(provider.NewManager()),
+	)
+
+	server := echo.New()
+	(WorkflowController{Service: workflowSvc}).Register(server)
 
 	formResp := httptest.NewRecorder()
-	mux.ServeHTTP(formResp, httptest.NewRequest(http.MethodGet, "/workflows", nil))
+	server.ServeHTTP(formResp, httptest.NewRequest(http.MethodGet, "/workflows", nil))
 	if formResp.Code != http.StatusOK || !strings.Contains(formResp.Body.String(), "Run mock workflow") {
 		t.Fatalf("form: %d %s", formResp.Code, formResp.Body.String())
 	}
@@ -34,28 +43,27 @@ func TestMockWorkflowUI(t *testing.T) {
 	createReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	createdResp := httptest.NewRecorder()
-	mux.ServeHTTP(createdResp, createReq)
+	server.ServeHTTP(createdResp, createReq)
 	if createdResp.Code != http.StatusSeeOther {
 		t.Fatalf("create: %d", createdResp.Code)
 	}
 
 	statusResp := httptest.NewRecorder()
-	mux.ServeHTTP(statusResp, httptest.NewRequest(http.MethodGet, createdResp.Header().Get("Location"), nil))
+	server.ServeHTTP(statusResp, httptest.NewRequest(http.MethodGet, createdResp.Header().Get("Location"), nil))
 	if statusResp.Code != http.StatusOK || !strings.Contains(statusResp.Body.String(), "&lt;scene&gt;") {
 		t.Fatalf("status: %d %s", statusResp.Code, statusResp.Body.String())
 	}
 
 	workflowID := strings.TrimPrefix(createdResp.Header().Get("Location"), "/workflows/")
-	store := workflow.NewStore(db)
-	if err := store.Transition(context.Background(), workflowID, "queued", "running", "", ""); err != nil {
+	if err := workflowSvc.Transition(context.Background(), workflowID, "queued", "running", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Transition(context.Background(), workflowID, "running", "succeeded", "workflows/"+workflowID+"/final.mp4", ""); err != nil {
+	if err := workflowSvc.Transition(context.Background(), workflowID, "running", "succeeded", "workflows/"+workflowID+"/final.mp4", ""); err != nil {
 		t.Fatal(err)
 	}
 
 	doneResp := httptest.NewRecorder()
-	mux.ServeHTTP(doneResp, httptest.NewRequest(http.MethodGet, createdResp.Header().Get("Location"), nil))
+	server.ServeHTTP(doneResp, httptest.NewRequest(http.MethodGet, createdResp.Header().Get("Location"), nil))
 	if doneResp.Code != http.StatusOK || !strings.Contains(doneResp.Body.String(), "Download mock MP4") || !strings.Contains(doneResp.Body.String(), "<video") {
 		t.Fatalf("completed status: %d %s", doneResp.Code, doneResp.Body.String())
 	}
@@ -64,7 +72,7 @@ func TestMockWorkflowUI(t *testing.T) {
 	invalidReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	rejectedResp := httptest.NewRecorder()
-	mux.ServeHTTP(rejectedResp, invalidReq)
+	server.ServeHTTP(rejectedResp, invalidReq)
 	if rejectedResp.Code != http.StatusBadRequest {
 		t.Fatalf("empty prompt: %d", rejectedResp.Code)
 	}

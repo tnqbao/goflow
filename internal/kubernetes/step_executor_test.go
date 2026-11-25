@@ -35,7 +35,7 @@ func testStepController(t *testing.T, run *unstructured.Unstructured, maximum in
 	t.Helper()
 	legacy, jobs := testController(t)
 	controller, _ := testRunController(run)
-	controller.Executor = &StepExecutor{Runs: controller.Runs, Jobs: jobs, Store: legacy.Store, Config: legacy.Config, Artifacts: legacy.Artifacts, MaxConcurrent: maximum, JobLock: &sync.Mutex{}}
+	controller.Executor = &StepExecutor{Runs: controller.Runs, Jobs: jobs, Workflows: legacy.Workflows, Config: legacy.Config, Artifacts: legacy.Artifacts, MaxConcurrent: maximum, JobLock: &sync.Mutex{}}
 	return controller, jobs
 }
 
@@ -125,11 +125,11 @@ func TestStepExecutorParallelAndLimit(t *testing.T) {
 func TestStepExecutorAccountsForLegacyWork(t *testing.T) {
 	ctx := context.Background()
 	controller, jobs := testStepController(t, mockRun("image"), 1)
-	legacy, err := controller.Executor.Store.Create(ctx, "legacy")
+	legacy, err := controller.Executor.Workflows.Create(ctx, "legacy", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := controller.Executor.Store.Transition(ctx, legacy.ID, "queued", "running", "", ""); err != nil {
+	if err := controller.Executor.Workflows.Transition(ctx, legacy.ID, "queued", "running", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
@@ -271,14 +271,14 @@ func TestLegacyControllerAccountsForVideoRunJobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	jobs.jobs[job.Name] = job
-	legacy, err := controller.Store.Create(ctx, "legacy")
+	legacy, err := controller.Workflows.Create(ctx, "legacy", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := controller.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, err := controller.Store.Get(ctx, legacy.ID)
+	got, err := controller.Workflows.Get(ctx, legacy.ID)
 	if err != nil || got.Status != "queued" {
 		t.Fatalf("legacy workflow = %+v, error = %v", got, err)
 	}
@@ -290,8 +290,8 @@ func TestSharedJobLimitDuringConcurrentReconciliation(t *testing.T) {
 	lock := &sync.Mutex{}
 	legacy.JobLock = lock
 	runs, _ := testRunController(mockRun("image"))
-	runs.Executor = &StepExecutor{Runs: runs.Runs, Jobs: jobs, Store: legacy.Store, Config: legacy.Config, Artifacts: legacy.Artifacts, MaxConcurrent: 1, JobLock: lock}
-	if _, err := legacy.Store.Create(ctx, "legacy"); err != nil {
+	runs.Executor = &StepExecutor{Runs: runs.Runs, Jobs: jobs, Workflows: legacy.Workflows, Config: legacy.Config, Artifacts: legacy.Artifacts, MaxConcurrent: 1, JobLock: lock}
+	if _, err := legacy.Workflows.Create(ctx, "legacy", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := runs.Reconcile(ctx, "sample"); err != nil {

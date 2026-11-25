@@ -43,7 +43,7 @@ func TestBaseRoutes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			newBaseMux(db).ServeHTTP(recorder, httptest.NewRequest(tt.method, tt.path, nil))
+			newBaseEcho(db).ServeHTTP(recorder, httptest.NewRequest(tt.method, tt.path, nil))
 			if recorder.Code != tt.status {
 				t.Errorf("status = %d, want %d", recorder.Code, tt.status)
 			}
@@ -337,7 +337,7 @@ esac
 }
 
 func TestEmbeddedAssets(t *testing.T) {
-	handler := newBaseMux(openTestDatabase(t))
+	handler := newBaseEcho(openTestDatabase(t))
 
 	home := httptest.NewRecorder()
 	handler.ServeHTTP(home, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -400,7 +400,7 @@ func TestOpenDatabaseFailure(t *testing.T) {
 
 func TestReadinessDatabaseFailure(t *testing.T) {
 	db := openTestDatabase(t)
-	handler := newBaseMux(db)
+	handler := newBaseEcho(db)
 
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
