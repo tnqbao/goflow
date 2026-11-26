@@ -216,17 +216,18 @@ func (e *StepExecutor) prepareStepPlan(
 		return e.buildMockStepPlan(step, prompt)
 	}
 
-	return e.prepareExternalProviderPlan(ctx, run.GetUID(), step, prompt, stepsByName, statusesByName)
+	return e.prepareExternalProviderPlan(ctx, run, step, prompt, stepsByName, statusesByName)
 }
 
 func (e *StepExecutor) prepareExternalProviderPlan(
 	ctx context.Context,
-	uid types.UID,
+	run *unstructured.Unstructured,
 	step executableStep,
 	prompt string,
 	stepsByName map[string]executableStep,
 	statusesByName map[string]map[string]interface{},
 ) (stepExecutionPlan, bool, string, error) {
+	uid := run.GetUID()
 	vp, err := e.Providers.Get(ctx, step.ProviderRef, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return stepExecutionPlan{}, false, fmt.Sprintf("VideoProvider %q not found", step.ProviderRef), nil
@@ -272,7 +273,7 @@ func (e *StepExecutor) prepareExternalProviderPlan(
 		if step.Type != mock.StepImage && step.Type != mock.StepVideo {
 			return stepExecutionPlan{}, false, fmt.Sprintf("provider type %q is not supported for %s steps", providerType, step.Type), nil
 		}
-		return e.buildFalStepPlan(ctx, uid, step, vp, prompt, stepsByName, statusesByName)
+		return e.buildFalStepPlan(ctx, run, uid, step, vp, prompt, stepsByName, statusesByName)
 	default:
 		return stepExecutionPlan{}, false, fmt.Sprintf("provider type %q is not supported for %s steps", providerType, step.Type), nil
 	}
@@ -352,6 +353,7 @@ func (e *StepExecutor) buildGeminiStepPlan(
 
 func (e *StepExecutor) buildFalStepPlan(
 	ctx context.Context,
+	run *unstructured.Unstructured,
 	uid types.UID,
 	step executableStep,
 	vp *unstructured.Unstructured,
@@ -386,7 +388,7 @@ func (e *StepExecutor) buildFalStepPlan(
 		return stepExecutionPlan{}, false, modelErr.Error(), nil
 	}
 
-	imageInput, depReason, err := resolveFalImageDependency(uid, step, stepsByName, statusesByName)
+	imageInput, depReason, err := resolveFalImageDependency(run, uid, step, stepsByName, statusesByName)
 	if err != nil || depReason != "" {
 		return stepExecutionPlan{}, false, depReason, err
 	}
@@ -462,6 +464,7 @@ func selectProviderModel(stepModel string, providerModels []string, defaultModel
 }
 
 func resolveFalImageDependency(
+	run *unstructured.Unstructured,
 	uid types.UID,
 	step executableStep,
 	stepsByName map[string]executableStep,
@@ -489,7 +492,22 @@ func resolveFalImageDependency(
 		imageInput = key
 	}
 
-	return imageInput, "", nil
+	if imageInput != "" || run == nil {
+		return imageInput, "", nil
+	}
+
+	refKey, hasRef, err := unstructured.NestedString(run.Object, "spec", "inputs", "reference_image", "stringValue")
+	if err != nil {
+		return "", "", fmt.Errorf("read reference image input: %w", err)
+	}
+	if !hasRef || strings.TrimSpace(refKey) == "" {
+		return "", "", nil
+	}
+	if !service.ReferenceKeyValid(strings.TrimSpace(refKey)) {
+		return "", "invalid reference_image key", nil
+	}
+
+	return strings.TrimSpace(refKey), "", nil
 }
 
 func resolveCompletedRasterDependency(
@@ -697,6 +715,14 @@ func readMockPrompt(run *unstructured.Unstructured) (string, bool, error) {
 	}
 	if hasStyle && strings.TrimSpace(style) != "" {
 		combined = combined + " (" + strings.TrimSpace(style) + ")"
+	}
+
+	notes, hasNotes, err := unstructured.NestedString(run.Object, "spec", "inputs", "reference_notes", "stringValue")
+	if err != nil {
+		return "", false, fmt.Errorf("read workflow reference notes: %w", err)
+	}
+	if hasNotes && strings.TrimSpace(notes) != "" {
+		combined = combined + " — " + strings.TrimSpace(notes)
 	}
 
 	if len(combined) > maxPromptBytes {

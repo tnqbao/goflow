@@ -12,6 +12,7 @@ import {
   LogOut,
   Play,
   Settings as SettingsIcon,
+  Sparkles,
   Workflow as WorkflowIcon,
 } from 'lucide-react'
 import { errorMessage, request, setSessionToken, useResource } from './api'
@@ -20,21 +21,22 @@ import { MediaLibrary } from './media'
 import { Providers } from './providers'
 import { Executions, orderedRuns, RunTable } from './runs'
 import { Settings } from './settings'
+import { Studio } from './studio'
 import type { Artifact, Run, User, Workflow } from './types'
 import { Alert, Loading } from './ui'
 import { Workflows } from './workflows'
 import './style.css'
 
 const pages = {
-  overview: {
-    label: 'Overview',
-    icon: LayoutDashboard,
-    help: 'Track workflows, executions and published outputs.',
+  studio: {
+    label: 'Create Video',
+    icon: Sparkles,
+    help: 'Connect an API key, describe your idea, attach references, and generate MP4 video in one click.',
   },
-  workflows: {
-    label: 'Workflows',
-    icon: WorkflowIcon,
-    help: 'Manage reusable definitions and start executions.',
+  media: {
+    label: 'Media Library',
+    icon: Images,
+    help: 'Preview, inspect, download and delete generated images, clips and final videos.',
   },
   executions: {
     label: 'Executions',
@@ -42,14 +44,19 @@ const pages = {
     help: 'Inspect run status, steps, logs and outputs.',
   },
   providers: {
-    label: 'Providers',
+    label: 'API Keys',
     icon: Boxes,
-    help: 'Manage provider credentials, models and limits.',
+    help: 'Manage Gemini, fal.ai and Mock provider keys, models and limits.',
   },
-  media: {
-    label: 'Media Library',
-    icon: Images,
-    help: 'Preview, inspect, download and delete generated images, clips and final videos.',
+  workflows: {
+    label: 'Workflows',
+    icon: WorkflowIcon,
+    help: 'Advanced visual DAG pipeline editor and reusable JSON definitions.',
+  },
+  overview: {
+    label: 'Overview',
+    icon: LayoutDashboard,
+    help: 'Track cluster metrics, active runs and published outputs.',
   },
   settings: {
     label: 'Settings',
@@ -63,7 +70,7 @@ function readRoute() {
   const [target, selected] = location.hash.replace(/^#\/?/, '').split('/')
   const page: Page = Object.hasOwn(pages, target)
     ? (target as Page)
-    : 'overview'
+    : 'studio'
   let id: string | undefined
   try {
     id =
@@ -94,7 +101,7 @@ function App() {
   return (
     <div className="shell">
       <aside className="sidebar">
-        <a className="brand" href="#/overview">
+        <a className="brand" href="#/studio">
           <span className="brand-mark">
             <Clapperboard size={21} />
           </span>
@@ -156,8 +163,8 @@ function App() {
               <p>{page.help}</p>
             </div>
             {route.page === 'overview' && session.value && (
-              <a className="button primary" href="#/workflows">
-                <Play size={16} /> Open workflows
+              <a className="button primary" href="#/studio">
+                <Play size={16} /> Create video
               </a>
             )}
           </div>
@@ -166,6 +173,7 @@ function App() {
             !session.error && <Loading />
           ) : (
             <>
+              {route.page === 'studio' && <Studio />}
               {route.page === 'overview' && <Overview />}
               {route.page === 'workflows' && <Workflows />}
               {route.page === 'executions' && <Executions id={route.id} />}

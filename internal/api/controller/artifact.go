@@ -19,10 +19,58 @@ type ArtifactController struct{ Service *service.Artifacts }
 func (ctrl ArtifactController) Register(e *echo.Echo, auth echo.MiddlewareFunc) {
 	group := e.Group("/api/v1/artifacts", noStoreCache, auth)
 	group.GET("", ctrl.list)
+	group.POST("/references", ctrl.uploadReference)
+	group.GET("/references/:name", ctrl.getReference)
 	group.GET("/:id", ctrl.get)
 	group.GET("/:id/download", ctrl.download)
 	group.HEAD("/:id/download", ctrl.download)
 	group.DELETE("/:id", ctrl.delete)
+}
+
+func (ctrl ArtifactController) uploadReference(c echo.Context) error {
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		return respondArtifactError(c, workflow.ErrInvalid)
+	}
+	file, err := fileHeader.Open()
+	if err != nil {
+		return respondArtifactError(c, workflow.ErrInvalid)
+	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			slog.Error("close uploaded reference image", "error", closeErr)
+		}
+	}()
+
+	ref, err := ctrl.Service.UploadReference(c.Request().Context(), file)
+	if err != nil {
+		return respondArtifactError(c, err)
+	}
+	return c.JSON(http.StatusCreated, ref)
+}
+
+func (ctrl ArtifactController) getReference(c echo.Context) error {
+	ref, err := ctrl.Service.OpenReference(c.Request().Context(), c.Param("name"))
+	if err != nil {
+		return respondArtifactError(c, err)
+	}
+	defer func() {
+		if closeErr := ref.Object.Close(); closeErr != nil {
+			slog.Error("close reference image stream", "error", closeErr)
+		}
+	}()
+
+	info, err := ref.Object.Stat()
+	if err != nil {
+		return respondArtifactError(c, err)
+	}
+
+	headers := c.Response().Header()
+	headers.Set("Content-Type", ref.ContentType)
+	headers.Set("X-Content-Type-Options", "nosniff")
+	headers.Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	http.ServeContent(c.Response(), c.Request(), ref.Name, info.ModTime(), ref.Object)
+	return nil
 }
 
 func (ctrl ArtifactController) list(c echo.Context) error {

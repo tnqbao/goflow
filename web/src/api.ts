@@ -110,6 +110,34 @@ export function useResource<T>(path: string | null, paged = false, period = 0) {
   return { value, error, refresh: () => setRevision((n) => n + 1) }
 }
 
+export async function uploadFile<T>(path: string, file: File): Promise<T> {
+  const form = new FormData()
+  form.append('file', file)
+  const headers = new Headers({ Accept: 'application/json' })
+  headers.set('X-CSRF-Token', csrfToken)
+  const response = await fetch(apiRoot + path, {
+    method: 'POST',
+    headers,
+    credentials: 'same-origin',
+    body: form,
+  })
+  if (response.status === 401) {
+    location.assign(
+      '/login?next=' + encodeURIComponent(location.pathname + location.hash),
+    )
+    throw new Error('Your session expired.')
+  }
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as {
+      message?: string
+    } | null
+    throw new Error(
+      data?.message ?? `Upload failed (HTTP ${response.status}).`,
+    )
+  }
+  return response.json()
+}
+
 export const idPath = encodeURIComponent
 export const errorMessage = (err: unknown) =>
   err instanceof Error ? err.message : 'The request failed.'
