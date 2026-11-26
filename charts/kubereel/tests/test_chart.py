@@ -61,7 +61,8 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(version["subresources"], {"status": {}})
         schema = version["schema"]["openAPIV3Schema"]["properties"]
         job_config = schema["status"]["properties"]["steps"]["items"]["properties"]["jobConfig"]
-        self.assertEqual(set(job_config["required"]), {"image", "claim", "instance", "sharedStorage", "pullPolicy", "ttlSeconds"})
+        self.assertEqual(set(job_config["required"]), {"image", "instance", "sharedStorage", "pullPolicy", "ttlSeconds"})
+        self.assertTrue({"storageType", "s3Bucket", "s3Region", "workerServiceAccount"}.issubset(job_config["properties"]))
         self.assertEqual(set(schema["spec"]["required"]), {"workflowRef", "workflowSnapshot"})
         self.assertEqual(schema["spec"]["x-kubernetes-validations"][0]["message"], "run inputs are immutable")
         snapshot = dict(schema["spec"]["properties"]["workflowSnapshot"])
@@ -175,10 +176,68 @@ class ChartTest(unittest.TestCase):
         )
 
     def test_unsupported_settings_are_rejected(self):
-        for value in ("replicaCount=2", "execution.mode=embedded", "execution.maxConcurrentJobs=0", "auth.sessionTTLSeconds=10", "storage.type=s3", "providers.mock.enabled=false", "service.type=LoadBalancer", "image.tag=latest", "persistence.existingClaim=old-claim", "workflow.maxConcurrent=4"):
+        for value in ("replicaCount=2", "execution.mode=embedded", "execution.maxConcurrentJobs=0", "auth.sessionTTLSeconds=10", "storage.type=s3", "storage.type=nfs", "providers.mock.enabled=false", "service.type=LoadBalancer", "image.tag=latest", "persistence.existingClaim=old-claim", "workflow.maxConcurrent=4"):
             with self.subTest(value=value):
                 result = subprocess.run(["helm", "template", "test", str(CHART), "--set", value], text=True, capture_output=True)
                 self.assertNotEqual(result.returncode, 0)
+
+    def test_s3_workload_identity_and_secret_modes(self):
+        items = render_list(
+            "--set", "storage.type=s3",
+            "--set", "storage.s3.bucket=kubereel-cloud-artifacts",
+            "--set", "storage.s3.region=us-west-2",
+            "--set", "storage.s3.prefix=prod/eks",
+            "--set", r"serviceAccount.annotations.eks\.amazonaws\.com/role-arn=arn:aws:iam::123456789012:role/kubereel-cp",
+            "--set", r"workerServiceAccount.annotations.eks\.amazonaws\.com/role-arn=arn:aws:iam::123456789012:role/kubereel-worker",
+            "--set", "networkPolicy.enabled=true",
+        )
+        sas = {item["metadata"]["name"]: item for item in items if item["kind"] == "ServiceAccount"}
+        self.assertEqual(set(sas), {"test-kubereel", "test-kubereel-worker"})
+        self.assertEqual(
+            sas["test-kubereel"]["metadata"]["annotations"]["eks.amazonaws.com/role-arn"],
+            "arn:aws:iam::123456789012:role/kubereel-cp",
+        )
+        self.assertEqual(
+            sas["test-kubereel-worker"]["metadata"]["annotations"]["eks.amazonaws.com/role-arn"],
+            "arn:aws:iam::123456789012:role/kubereel-worker",
+        )
+
+        # Worker ServiceAccount must never be bound to control-plane Kubernetes RBAC.
+        bindings = [item for item in items if item["kind"] == "RoleBinding"]
+        self.assertEqual(len(bindings), 1)
+        self.assertEqual(bindings[0]["subjects"][0]["name"], "test-kubereel")
+
+        deployment = next(item for item in items if item["kind"] == "Deployment")
+        env_items = {item["name"]: item for item in deployment["spec"]["template"]["spec"]["containers"][0]["env"]}
+        self.assertEqual(env_items["STORAGE_TYPE"]["value"], "s3")
+        self.assertEqual(env_items["S3_BUCKET"]["value"], "kubereel-cloud-artifacts")
+        self.assertEqual(env_items["S3_REGION"]["value"], "us-west-2")
+        self.assertEqual(env_items["S3_PREFIX"]["value"], "prod/eks")
+        self.assertEqual(env_items["WORKER_SERVICE_ACCOUNT"]["value"], "test-kubereel-worker")
+        self.assertNotIn("AWS_ACCESS_KEY_ID", env_items)
+        self.assertNotIn("S3_CREDENTIALS_SECRET", env_items)
+
+        jobs_np = next(item for item in items if item["kind"] == "NetworkPolicy" and item["metadata"]["name"] == "test-kubereel-jobs")
+        self.assertEqual(len(jobs_np["spec"]["egress"]), 3)
+
+        # Optional static Secret credentials for non-AWS S3-compatible object stores.
+        secret_items = render_list(
+            "--set", "storage.type=s3",
+            "--set", "storage.s3.bucket=kubereel-minio",
+            "--set", "storage.s3.region=us-east-1",
+            "--set", "storage.s3.endpoint=https://minio.example.com",
+            "--set", "storage.s3.forcePathStyle=true",
+            "--set", "storage.s3.existingSecret=minio-s3-secret",
+        )
+        secret_dep = next(item for item in secret_items if item["kind"] == "Deployment")
+        sec_env = {item["name"]: item for item in secret_dep["spec"]["template"]["spec"]["containers"][0]["env"]}
+        self.assertEqual(sec_env["S3_ENDPOINT"]["value"], "https://minio.example.com")
+        self.assertEqual(sec_env["S3_FORCE_PATH_STYLE"]["value"], "true")
+        self.assertEqual(sec_env["S3_CREDENTIALS_SECRET"]["value"], "minio-s3-secret")
+        self.assertEqual(
+            sec_env["AWS_ACCESS_KEY_ID"]["valueFrom"]["secretKeyRef"],
+            {"name": "minio-s3-secret", "key": "accessKeyId"},
+        )
 
     def test_ingress_requires_host(self):
         result = subprocess.run(

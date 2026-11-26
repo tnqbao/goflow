@@ -27,6 +27,16 @@ const (
 	EnvAuthBootstrapUsername    = "AUTH_BOOTSTRAP_USERNAME"
 	EnvAuthBootstrapPassword    = "AUTH_BOOTSTRAP_PASSWORD"
 	EnvAuthSetupToken           = "AUTH_SETUP_TOKEN"
+	EnvStorageType              = "STORAGE_TYPE"
+	EnvS3Bucket                 = "S3_BUCKET"
+	EnvS3Region                 = "S3_REGION"
+	EnvS3Prefix                 = "S3_PREFIX"
+	EnvS3Endpoint               = "S3_ENDPOINT"
+	EnvS3ForcePathStyle         = "S3_FORCE_PATH_STYLE"
+	EnvS3CredentialsSecret      = "S3_CREDENTIALS_SECRET"
+	EnvS3AccessKeyIDKey         = "S3_ACCESS_KEY_ID_KEY"
+	EnvS3SecretAccessKeyKey     = "S3_SECRET_ACCESS_KEY_KEY"
+	EnvWorkerServiceAccount     = "WORKER_SERVICE_ACCOUNT"
 )
 
 const (
@@ -55,6 +65,7 @@ type Config struct {
 	Database          string
 	ArtifactMaxBytes  int64
 	ArtifactRetention time.Duration
+	Storage           StorageConfig
 	Auth              AuthConfig
 	Kubernetes        KubernetesConfig
 }
@@ -65,6 +76,9 @@ func Defaults() Config {
 		Address:          defaultAddress,
 		Database:         defaultDatabasePath,
 		ArtifactMaxBytes: defaultArtifactMaxBytes,
+		Storage: StorageConfig{
+			Type: StorageTypePVC,
+		},
 		Auth: AuthConfig{
 			SessionTTL: defaultSessionTTLSeconds * time.Second,
 		},
@@ -90,6 +104,12 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.ArtifactRetention = retention
+
+	storageCfg, err := loadStorageConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Storage = storageCfg
 
 	k8sCfg, err := loadKubernetesConfig()
 	if err != nil {

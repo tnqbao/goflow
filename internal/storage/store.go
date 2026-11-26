@@ -29,3 +29,10 @@ type Store interface {
 	Delete(context.Context, string) error
 	DeleteExpired(context.Context, string, time.Time, time.Time) (bool, error)
 }
+
+// ManagedStore extends Store with CLI path-to-key resolution and lifecycle cleanup.
+type ManagedStore interface {
+	Store
+	io.Closer
+	Key(targetPath string) (string, error)
+}

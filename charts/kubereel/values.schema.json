@@ -4,15 +4,59 @@
   "not": {"anyOf": [{"required": ["persistence"]}, {"required": ["workflow"]}]},
   "properties": {
     "replicaCount": {"const": 1},
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "annotations": {"type": "object"}
+      }
+    },
+    "workerServiceAccount": {
+      "type": "object",
+      "properties": {
+        "create": {"type": "boolean"},
+        "name": {"type": "string", "maxLength": 253},
+        "annotations": {"type": "object"}
+      }
+    },
     "storage": {
       "type": "object",
       "properties": {
-        "type": {"const": "pvc"},
+        "type": {"enum": ["pvc", "s3"]},
         "accessMode": {"enum": ["ReadWriteOnce", "ReadWriteMany"]},
         "existingClaim": {"type": "string"},
         "maxArtifactBytes": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
-        "retentionSeconds": {"type": "integer", "minimum": 0, "maximum": 9223372036}
-      }
+        "retentionSeconds": {"type": "integer", "minimum": 0, "maximum": 9223372036},
+        "s3": {
+          "type": "object",
+          "properties": {
+            "bucket": {"type": "string", "maxLength": 63},
+            "region": {"type": "string", "maxLength": 64},
+            "prefix": {"type": "string", "maxLength": 128},
+            "endpoint": {"type": "string", "maxLength": 2048},
+            "forcePathStyle": {"type": "boolean"},
+            "existingSecret": {"type": "string", "maxLength": 253},
+            "accessKeyIdKey": {"type": "string", "minLength": 1, "maxLength": 253},
+            "secretAccessKeyKey": {"type": "string", "minLength": 1, "maxLength": 253}
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"type": {"const": "s3"}}, "required": ["type"]},
+          "then": {
+            "required": ["s3"],
+            "properties": {
+              "s3": {
+                "required": ["bucket", "region"],
+                "properties": {
+                  "bucket": {"type": "string", "minLength": 3, "maxLength": 63, "pattern": "^[a-z0-9][a-z0-9.-]*[a-z0-9]$"},
+                  "region": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_-]+$"}
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "execution": {
       "type": "object",

@@ -41,6 +41,26 @@ helm install kubereel ./charts/kubereel \
   --wait
 ```
 
+### Multi-Node Cloud Storage (AWS S3 / S3-Compatible with Workload Identity)
+
+For multi-node cloud clusters such as AWS EKS without `ReadWriteMany` shared filesystems, configure `storage.type=s3`. Temporary `worker` and `render` Job Pods run without mounting any PVC or node affinity, scheduling freely across nodes under a dedicated restricted `<release>-kubereel-worker` `ServiceAccount` (zero Kubernetes RBAC) while the control-plane Pod keeps a small local PVC purely for SQLite authentication state (`/data/kubereel.db`):
+
+```sh
+helm install kubereel ./charts/kubereel \
+  --namespace kubereel \
+  --create-namespace \
+  --set storage.type=s3 \
+  --set storage.s3.bucket=my-kubereel-artifacts \
+  --set storage.s3.region=us-west-2 \
+  --set storage.s3.prefix=prod \
+  --set 'serviceAccount.annotations.eks\.amazonaws\.com/role-arn=arn:aws:iam::123456789012:role/kubereel-control-plane' \
+  --set 'workerServiceAccount.annotations.eks\.amazonaws\.com/role-arn=arn:aws:iam::123456789012:role/kubereel-worker' \
+  --wait
+```
+
+- **AWS Workload Identity (recommended):** Leave `storage.s3.existingSecret` empty. Both EKS Pod Identity and IRSA (`eks.amazonaws.com/role-arn`) are resolved automatically with zero static AWS keys.
+- **S3-compatible object storage (MinIO / Ceph RGW / Cloudflare R2):** Set `storage.s3.endpoint`, `storage.s3.forcePathStyle=true` (when path-style addressing is needed), and `storage.s3.existingSecret` referencing a Secret with `accessKeyId` and `secretAccessKey`.
+
 ### Optional Resources
 
 - **Ingress (`ingress.enabled=true`):** Requires `ingress.host` (and `ingress.tls` for HTTPS termination). Complete initial administrator setup before exposing an Ingress publicly.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path"
 
+	"github.com/tnqbao/kubereel/internal/config"
 	"github.com/tnqbao/kubereel/internal/workflow"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -26,6 +27,16 @@ type savedJobConfig struct {
 	Claim                    string            `json:"claim"`
 	Instance                 string            `json:"instance"`
 	SharedStorage            *bool             `json:"sharedStorage"`
+	StorageType              string            `json:"storageType"`
+	S3Bucket                 string            `json:"s3Bucket"`
+	S3Region                 string            `json:"s3Region"`
+	S3Prefix                 string            `json:"s3Prefix"`
+	S3Endpoint               string            `json:"s3Endpoint"`
+	S3ForcePathStyle         *bool             `json:"s3ForcePathStyle"`
+	S3SecretName             *string           `json:"s3SecretName"`
+	S3AccessKeyIDKey         *string           `json:"s3AccessKeyIDKey"`
+	S3SecretAccessKeyKey     *string           `json:"s3SecretAccessKeyKey"`
+	WorkerServiceAccount     string            `json:"workerServiceAccount"`
 	PullPolicy               corev1.PullPolicy `json:"pullPolicy"`
 	TTLSeconds               *int32            `json:"ttlSeconds"`
 	ArtifactMaxBytes         *int64            `json:"artifactMaxBytes"`
@@ -77,13 +88,21 @@ func countActiveProviderJobs(ctx context.Context, jobs Jobs, instance, providerN
 func jobConfigStatus(cfg JobConfig, job *batchv1.Job) map[string]interface{} {
 	status := map[string]interface{}{
 		"image":         cfg.Image,
-		"claim":         cfg.Claim,
 		"instance":      cfg.Instance,
 		"sharedStorage": cfg.SharedStorage,
 		"pullPolicy":    string(job.Spec.Template.Spec.Containers[0].ImagePullPolicy),
 		"ttlSeconds":    int64(*job.Spec.TTLSecondsAfterFinished),
 	}
 
+	if cfg.Claim != "" {
+		status["claim"] = cfg.Claim
+	}
+	if cfg.WorkerServiceAccount != "" {
+		status["workerServiceAccount"] = cfg.WorkerServiceAccount
+	}
+	if cfg.S3 != nil {
+		recordS3JobStatus(status, cfg.S3)
+	}
 	if cfg.Artifacts != nil {
 		status["artifactMaxBytes"] = cfg.Artifacts.MaxBytes
 		status["artifactRetentionSeconds"] = cfg.Artifacts.RetentionSeconds
@@ -100,6 +119,27 @@ func jobConfigStatus(cfg JobConfig, job *batchv1.Job) map[string]interface{} {
 	}
 
 	return status
+}
+
+func recordS3JobStatus(status map[string]interface{}, s3Cfg *S3JobConfig) {
+	status["storageType"] = config.StorageTypeS3
+	status["s3Bucket"] = s3Cfg.Bucket
+	status["s3Region"] = s3Cfg.Region
+
+	if s3Cfg.Prefix != "" {
+		status["s3Prefix"] = s3Cfg.Prefix
+	}
+	if s3Cfg.Endpoint != "" {
+		status["s3Endpoint"] = s3Cfg.Endpoint
+	}
+	if s3Cfg.ForcePathStyle {
+		status["s3ForcePathStyle"] = true
+	}
+	if s3Cfg.Credentials != nil {
+		status["s3SecretName"] = s3Cfg.Credentials.Name
+		status["s3AccessKeyIDKey"] = s3Cfg.Credentials.AccessKeyIDKey
+		status["s3SecretAccessKeyKey"] = s3Cfg.Credentials.SecretAccessKeyKey
+	}
 }
 
 func recordedJobConfig(stepEntry map[string]interface{}, fallback JobConfig) (JobConfig, error) {
@@ -134,11 +174,11 @@ func decodeSavedJobConfig(stored map[string]interface{}) (savedJobConfig, error)
 }
 
 func buildJobConfigFromSaved(saved savedJobConfig) (JobConfig, error) {
-	if saved.Image == "" || saved.Claim == "" || saved.Instance == "" || saved.SharedStorage == nil || saved.TTLSeconds == nil {
+	if saved.Image == "" || saved.Instance == "" || saved.SharedStorage == nil || saved.TTLSeconds == nil {
 		return JobConfig{}, fmt.Errorf("recorded Job configuration is incomplete")
 	}
 
-	if *saved.TTLSeconds < 0 || !isValidPullPolicy(saved.PullPolicy) {
+	if *saved.TTLSeconds < 0 || !isValidPullPolicy(saved.PullPolicy) || !isValidServiceAccountName(saved.WorkerServiceAccount) {
 		return JobConfig{}, fmt.Errorf("recorded Job configuration is invalid")
 	}
 
@@ -150,11 +190,23 @@ func buildJobConfigFromSaved(saved savedJobConfig) (JobConfig, error) {
 		return JobConfig{}, fmt.Errorf("recorded secret configuration is incomplete")
 	}
 
+	s3Cfg, err := buildSavedS3JobConfig(saved)
+	if err != nil {
+		return JobConfig{}, err
+	}
+
+	normalizedS3, err := validateJobStorageBinding(saved.Claim, s3Cfg)
+	if err != nil {
+		return JobConfig{}, fmt.Errorf("recorded storage configuration is invalid: %w", err)
+	}
+
 	cfg := JobConfig{
 		Image:                   saved.Image,
 		Claim:                   saved.Claim,
 		Instance:                saved.Instance,
 		SharedStorage:           *saved.SharedStorage,
+		S3:                      normalizedS3,
+		WorkerServiceAccount:    saved.WorkerServiceAccount,
 		PullPolicy:              saved.PullPolicy,
 		TTLSecondsAfterFinished: saved.TTLSeconds,
 		ProviderName:            saved.ProviderName,
@@ -183,6 +235,37 @@ func buildJobConfigFromSaved(saved savedJobConfig) (JobConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+func buildSavedS3JobConfig(saved savedJobConfig) (*S3JobConfig, error) {
+	if saved.StorageType == "" || saved.StorageType == config.StorageTypePVC {
+		return nil, nil
+	}
+	if saved.StorageType != config.StorageTypeS3 {
+		return nil, fmt.Errorf("unsupported recorded storage type %q", saved.StorageType)
+	}
+
+	hasSecret := saved.S3SecretName != nil
+	if hasSecret != (saved.S3AccessKeyIDKey != nil) || hasSecret != (saved.S3SecretAccessKeyKey != nil) {
+		return nil, fmt.Errorf("recorded S3 secret configuration is incomplete")
+	}
+
+	s3Cfg := &S3JobConfig{
+		Bucket:         saved.S3Bucket,
+		Region:         saved.S3Region,
+		Prefix:         saved.S3Prefix,
+		Endpoint:       saved.S3Endpoint,
+		ForcePathStyle: saved.S3ForcePathStyle != nil && *saved.S3ForcePathStyle,
+	}
+	if hasSecret {
+		s3Cfg.Credentials = &S3SecretRefs{
+			Name:               *saved.S3SecretName,
+			AccessKeyIDKey:     *saved.S3AccessKeyIDKey,
+			SecretAccessKeyKey: *saved.S3SecretAccessKeyKey,
+		}
+	}
+
+	return s3Cfg, nil
 }
 
 // StepJob builds a deterministic worker Job owned by a VideoRun.
@@ -295,7 +378,8 @@ func validateStepPodSpec(actual, expected *corev1.PodSpec) error {
 		return fmt.Errorf("step Job pod configuration mismatch")
 	}
 
-	matchesExpectedPod := apiequality.Semantic.DeepEqual(actual.Volumes, expected.Volumes) &&
+	matchesExpectedPod := actual.ServiceAccountName == expected.ServiceAccountName &&
+		apiequality.Semantic.DeepEqual(actual.Volumes, expected.Volumes) &&
 		apiequality.Semantic.DeepEqual(actual.SecurityContext, expected.SecurityContext) &&
 		apiequality.Semantic.DeepEqual(actual.AutomountServiceAccountToken, expected.AutomountServiceAccountToken) &&
 		apiequality.Semantic.DeepEqual(actual.Affinity, expected.Affinity)

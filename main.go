@@ -88,11 +88,7 @@ func parseTaskFlags(command string, args []string) (string, string, error) {
 }
 
 func runTask(ctx context.Context, command, inputPath, outputPath string, cfg config.Config) (runErr error) {
-	if cfg.Database == "" {
-		return fmt.Errorf("artifact data directory is required")
-	}
-
-	artifacts, err := storage.NewFilesystem(filepath.Dir(cfg.Database), cfg.ArtifactMaxBytes, cfg.ArtifactRetention)
+	artifacts, err := openArtifactStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -142,7 +138,7 @@ func runServer(ctx context.Context, cfg config.Config) (runErr error) {
 		runErr = errors.Join(runErr, db.Close())
 	}()
 
-	artifacts, err := storage.NewFilesystem(filepath.Dir(cfg.Database), cfg.ArtifactMaxBytes, cfg.ArtifactRetention)
+	artifacts, err := openArtifactStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -280,6 +276,31 @@ func shutdownServer(server *http.Server, stopped <-chan error, gracePeriod time.
 	}
 
 	return serveErr
+}
+
+func openArtifactStore(ctx context.Context, cfg config.Config) (storage.ManagedStore, error) {
+	if cfg.Storage.Type == config.StorageTypeS3 {
+		virtualRoot := "/data"
+		if cfg.Database != "" {
+			virtualRoot = filepath.Dir(cfg.Database)
+		}
+		return storage.NewS3(ctx, storage.S3Config{
+			Bucket:         cfg.Storage.S3.Bucket,
+			Region:         cfg.Storage.S3.Region,
+			Prefix:         cfg.Storage.S3.Prefix,
+			Endpoint:       cfg.Storage.S3.Endpoint,
+			ForcePathStyle: cfg.Storage.S3.ForcePathStyle,
+			VirtualRoot:    virtualRoot,
+			MaxBytes:       cfg.ArtifactMaxBytes,
+			Retention:      cfg.ArtifactRetention,
+		})
+	}
+
+	if cfg.Database == "" {
+		return nil, fmt.Errorf("artifact data directory is required")
+	}
+
+	return storage.NewFilesystem(filepath.Dir(cfg.Database), cfg.ArtifactMaxBytes, cfg.ArtifactRetention)
 }
 
 func openDatabase(ctx context.Context, cfg config.Config) (*sql.DB, error) {

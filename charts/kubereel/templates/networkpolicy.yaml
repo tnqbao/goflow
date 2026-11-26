@@ -44,4 +44,12 @@ spec:
     - ports:
         - protocol: TCP
           port: 443
+    {{- if eq .Values.storage.type "s3" }}
+    - to:
+        - ipBlock:
+            cidr: 169.254.170.23/32
+      ports:
+        - protocol: TCP
+          port: 80
+    {{- end }}
 {{- end }}

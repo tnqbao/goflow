@@ -323,17 +323,31 @@ spec:
                       maxLength: 253
                     jobConfig:
                       type: object
-                      required: [image, claim, instance, sharedStorage, pullPolicy, ttlSeconds]
+                      required: [image, instance, sharedStorage, pullPolicy, ttlSeconds]
                       x-kubernetes-validations:
                       - rule: has(self.artifactMaxBytes) == has(self.artifactRetentionSeconds)
                         message: artifact configuration fields must be provided together
                       - rule: has(self.secretName) == has(self.secretKey)
                         message: secretName and secretKey must be provided together
+                      - rule: "(!has(self.storageType) || self.storageType == 'pvc') ? has(self.claim) : (has(self.s3Bucket) && has(self.s3Region))"
+                        message: PVC jobs require claim and S3 jobs require s3Bucket and s3Region
+                      - rule: has(self.s3SecretName) == has(self.s3AccessKeyIDKey) && has(self.s3SecretName) == has(self.s3SecretAccessKeyKey)
+                        message: S3 secret configuration fields must be provided together
                       properties:
                         image: {type: string, minLength: 1, maxLength: 2048}
                         claim: {type: string, minLength: 1, maxLength: 253}
                         instance: {type: string, minLength: 1, maxLength: 63}
                         sharedStorage: {type: boolean}
+                        storageType: {type: string, enum: [pvc, s3]}
+                        s3Bucket: {type: string, minLength: 3, maxLength: 63}
+                        s3Region: {type: string, minLength: 1, maxLength: 64}
+                        s3Prefix: {type: string, maxLength: 128}
+                        s3Endpoint: {type: string, minLength: 1, maxLength: 2048}
+                        s3ForcePathStyle: {type: boolean}
+                        s3SecretName: {type: string, minLength: 1, maxLength: 253}
+                        s3AccessKeyIDKey: {type: string, minLength: 1, maxLength: 253}
+                        s3SecretAccessKeyKey: {type: string, minLength: 1, maxLength: 253}
+                        workerServiceAccount: {type: string, minLength: 1, maxLength: 253}
                         pullPolicy: {type: string, enum: [Always, IfNotPresent, Never]}
                         ttlSeconds: {type: integer, minimum: 0, maximum: 2147483647}
                         artifactMaxBytes: {type: integer, minimum: 1, maximum: 9007199254740991}

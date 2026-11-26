@@ -13,15 +13,16 @@ const (
 
 // KubernetesConfig holds settings for running the control plane inside Kubernetes.
 type KubernetesConfig struct {
-	Enabled           bool
-	Namespace         string
-	JobImage          string
-	ImagePullPolicy   string
-	PVCName           string
-	InstanceName      string
-	SharedStorage     bool
-	MaxConcurrentJobs int
-	JobTTLSeconds     *int32
+	Enabled              bool
+	Namespace            string
+	JobImage             string
+	ImagePullPolicy      string
+	PVCName              string
+	InstanceName         string
+	SharedStorage        bool
+	WorkerServiceAccount string
+	MaxConcurrentJobs    int
+	JobTTLSeconds        *int32
 }
 
 func loadKubernetesConfig() (KubernetesConfig, error) {
@@ -55,15 +56,16 @@ func loadKubernetesConfig() (KubernetesConfig, error) {
 	}
 
 	return KubernetesConfig{
-		Enabled:           true,
-		Namespace:         namespace,
-		JobImage:          os.Getenv(EnvJobImage),
-		ImagePullPolicy:   os.Getenv(EnvImagePullPolicy),
-		PVCName:           os.Getenv(EnvPVCName),
-		InstanceName:      os.Getenv(EnvInstanceName),
-		SharedStorage:     sharedStorage,
-		MaxConcurrentJobs: maxConcurrentJobs,
-		JobTTLSeconds:     jobTTLSeconds,
+		Enabled:              true,
+		Namespace:            namespace,
+		JobImage:             os.Getenv(EnvJobImage),
+		ImagePullPolicy:      os.Getenv(EnvImagePullPolicy),
+		PVCName:              os.Getenv(EnvPVCName),
+		InstanceName:         os.Getenv(EnvInstanceName),
+		SharedStorage:        sharedStorage,
+		WorkerServiceAccount: os.Getenv(EnvWorkerServiceAccount),
+		MaxConcurrentJobs:    maxConcurrentJobs,
+		JobTTLSeconds:        jobTTLSeconds,
 	}, nil
 }
 

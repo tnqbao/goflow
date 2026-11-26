@@ -129,3 +129,95 @@ func TestJobArtifactConfiguration(t *testing.T) {
 		t.Fatal("accepted zero artifact limit")
 	}
 }
+
+func TestJobS3WorkloadIdentityAndMultiNodePlacement(t *testing.T) {
+	id := strings.Repeat("b", 32)
+	cfg := JobConfig{
+		Image:                "example/kubereel:v1",
+		Instance:             "cloud-rel",
+		WorkerServiceAccount: "kubereel-worker",
+		S3: &S3JobConfig{
+			Bucket:         "kubereel-cloud-artifacts",
+			Region:         "us-west-2",
+			Prefix:         "/prod/",
+			Endpoint:       "https://s3.us-west-2.amazonaws.com",
+			ForcePathStyle: true,
+		},
+		Artifacts: &ArtifactConfig{
+			MaxBytes:         2048,
+			RetentionSeconds: 300,
+		},
+	}
+
+	job, err := Job(id, StageWorker, cfg)
+	if err != nil {
+		t.Fatalf("Job(S3) error = %v", err)
+	}
+
+	pod := job.Spec.Template.Spec
+	if pod.ServiceAccountName != "kubereel-worker" {
+		t.Fatalf("ServiceAccountName = %q, want kubereel-worker", pod.ServiceAccountName)
+	}
+	if *pod.AutomountServiceAccountToken {
+		t.Fatal("worker pod unexpectedly automounted Kubernetes API token")
+	}
+	if len(pod.Volumes) != 0 || len(pod.Containers[0].VolumeMounts) != 0 {
+		t.Fatalf("S3 job mounted unexpected volumes: %+v / %+v", pod.Volumes, pod.Containers[0].VolumeMounts)
+	}
+	if pod.Affinity != nil {
+		t.Fatalf("S3 job unexpectedly pinned to single node: %+v", pod.Affinity)
+	}
+
+	envMap := make(map[string]string, len(pod.Containers[0].Env))
+	for _, item := range pod.Containers[0].Env {
+		if item.ValueFrom != nil {
+			t.Fatalf("workload identity S3 job injected static secret env var %q", item.Name)
+		}
+		envMap[item.Name] = item.Value
+	}
+	if envMap[config.EnvStorageType] != config.StorageTypeS3 ||
+		envMap[config.EnvS3Bucket] != "kubereel-cloud-artifacts" ||
+		envMap[config.EnvS3Region] != "us-west-2" ||
+		envMap[config.EnvS3Prefix] != "prod" ||
+		envMap[config.EnvS3ForcePathStyle] != "true" {
+		t.Fatalf("unexpected S3 job env = %v", envMap)
+	}
+
+	status := jobConfigStatus(cfg, job)
+	if _, hasClaim := status["claim"]; hasClaim {
+		t.Fatalf("S3 jobConfigStatus unexpectedly set claim: %+v", status)
+	}
+	recorded, err := recordedJobConfig(map[string]interface{}{"jobConfig": status}, JobConfig{})
+	if err != nil {
+		t.Fatalf("recordedJobConfig(S3) error = %v", err)
+	}
+	rebuilt, err := Job(id, StageWorker, recorded)
+	if err != nil {
+		t.Fatalf("rebuild Job(S3) error = %v", err)
+	}
+	if err := validateStepPodSpec(&job.Spec.Template.Spec, &rebuilt.Spec.Template.Spec); err != nil {
+		t.Fatalf("validateStepPodSpec(S3) mismatch = %v", err)
+	}
+	if err := validateStepContainerSpec(&job.Spec.Template.Spec.Containers[0], &rebuilt.Spec.Template.Spec.Containers[0]); err != nil {
+		t.Fatalf("validateStepContainerSpec(S3) mismatch = %v", err)
+	}
+
+	// Verify optional Secret-backed S3 credentials for S3-compatible stores without workload identity.
+	cfg.S3.Credentials = &S3SecretRefs{
+		Name:               "minio-creds",
+		AccessKeyIDKey:     "accessKeyId",
+		SecretAccessKeyKey: "secretAccessKey",
+	}
+	secretJob, err := Job(id, StageRender, cfg)
+	if err != nil {
+		t.Fatalf("Job(S3 with Secret) error = %v", err)
+	}
+	secretStatus := jobConfigStatus(cfg, secretJob)
+	recordedSecretCfg, err := recordedJobConfig(map[string]interface{}{"jobConfig": secretStatus}, JobConfig{})
+	if err != nil || recordedSecretCfg.S3 == nil || recordedSecretCfg.S3.Credentials == nil {
+		t.Fatalf("recorded S3 secret config = %+v, %v", recordedSecretCfg, err)
+	}
+	if recordedSecretCfg.S3.Credentials.Name != "minio-creds" {
+		t.Fatalf("unexpected secret name = %q", recordedSecretCfg.S3.Credentials.Name)
+	}
+}

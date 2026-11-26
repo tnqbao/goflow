@@ -13,6 +13,10 @@ KubeReel {{ .Chart.AppVersion }} has been deployed in namespace {{ .Release.Name
 2. Complete the one-time initial administrator setup at /setup before exposing any ingress publicly.
 {{- end }}
 
+{{- if eq .Values.storage.type "s3" }}
+Storage mode: S3 ({{ .Values.storage.s3.bucket }} in {{ .Values.storage.s3.region }}; worker ServiceAccount: {{ include "kubereel.workerServiceAccountName" . }}).
+{{- end }}
+
 3. Note on upgrades:
    Helm does not automatically update CRDs in crds/ during upgrades. Apply updated CRDs first:
    kubectl apply -f charts/kubereel/crds/

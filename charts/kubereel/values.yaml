@@ -9,6 +9,17 @@ service:
   type: ClusterIP
   port: 8080
 
+serviceAccount:
+  # Optional annotations (e.g. eks.amazonaws.com/role-arn for AWS IRSA on the control plane).
+  annotations: {}
+
+workerServiceAccount:
+  # Automatically created with zero Kubernetes RBAC when storage.type is s3 unless an existing name is set.
+  create: false
+  name: ""
+  # Optional annotations (e.g. eks.amazonaws.com/role-arn for AWS IRSA on worker and render Jobs).
+  annotations: {}
+
 storage:
   type: pvc
   size: 10Gi
@@ -19,6 +30,16 @@ storage:
   maxArtifactBytes: 1073741824
   # Zero disables artifact expiry for successful VideoRuns.
   retentionSeconds: 0
+  s3:
+    bucket: ""
+    region: ""
+    prefix: ""
+    endpoint: ""
+    forcePathStyle: false
+    # Leave empty to use cloud Workload Identity (EKS Pod Identity / IRSA).
+    existingSecret: ""
+    accessKeyIdKey: "accessKeyId"
+    secretAccessKeyKey: "secretAccessKey"
 
 resources:
   requests:

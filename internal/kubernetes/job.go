@@ -11,6 +11,7 @@ import (
 
 	"github.com/tnqbao/kubereel/internal/config"
 	"github.com/tnqbao/kubereel/internal/executor"
+	"github.com/tnqbao/kubereel/internal/storage"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -40,12 +41,31 @@ type SecretKeyRef struct {
 	Key  string
 }
 
+// S3SecretRefs identifies static S3 credentials stored in a Kubernetes Secret when workload identity is unavailable.
+type S3SecretRefs struct {
+	Name               string
+	AccessKeyIDKey     string
+	SecretAccessKeyKey string
+}
+
+// S3JobConfig propagates S3-compatible artifact storage settings to worker and render Jobs.
+type S3JobConfig struct {
+	Bucket         string
+	Region         string
+	Prefix         string
+	Endpoint       string
+	ForcePathStyle bool
+	Credentials    *S3SecretRefs
+}
+
 // JobConfig defines how temporary worker and render Jobs are constructed.
 type JobConfig struct {
 	Image                   string
 	Claim                   string
 	Instance                string
 	SharedStorage           bool
+	S3                      *S3JobConfig
+	WorkerServiceAccount    string
 	PullPolicy              corev1.PullPolicy
 	TTLSecondsAfterFinished *int32
 	Artifacts               *ArtifactConfig
@@ -113,8 +133,18 @@ func validateAndNormalizeJobConfig(workflowID, stage string, cfg JobConfig) (Job
 		return JobConfig{}, 0, fmt.Errorf("invalid workflow stage")
 	}
 
-	if cfg.Image == "" || cfg.Claim == "" || cfg.Instance == "" {
-		return JobConfig{}, 0, fmt.Errorf("image, claim and instance are required")
+	if cfg.Image == "" || cfg.Instance == "" {
+		return JobConfig{}, 0, fmt.Errorf("image and instance are required")
+	}
+
+	normalizedS3, err := validateJobStorageBinding(cfg.Claim, cfg.S3)
+	if err != nil {
+		return JobConfig{}, 0, err
+	}
+	cfg.S3 = normalizedS3
+
+	if !isValidServiceAccountName(cfg.WorkerServiceAccount) {
+		return JobConfig{}, 0, fmt.Errorf("invalid worker service account")
 	}
 
 	if cfg.PullPolicy == "" {
@@ -186,6 +216,62 @@ func isValidProviderBinding(cfg JobConfig) bool {
 	return len(key) > 0 && len(key) <= 253 && secretKeyPattern.MatchString(key)
 }
 
+func validateJobStorageBinding(claim string, s3Cfg *S3JobConfig) (*S3JobConfig, error) {
+	if s3Cfg == nil {
+		if claim == "" {
+			return nil, fmt.Errorf("claim is required for PVC storage")
+		}
+		return nil, nil
+	}
+
+	if err := storage.ValidateS3Bucket(s3Cfg.Bucket); err != nil {
+		return nil, err
+	}
+	if err := storage.ValidateS3Region(s3Cfg.Region); err != nil {
+		return nil, err
+	}
+	if err := storage.ValidateS3Endpoint(s3Cfg.Endpoint); err != nil {
+		return nil, err
+	}
+
+	prefix, err := storage.NormalizeS3Prefix(s3Cfg.Prefix)
+	if err != nil {
+		return nil, err
+	}
+	if !isValidS3SecretRefs(s3Cfg.Credentials) {
+		return nil, fmt.Errorf("invalid S3 credentials secret reference")
+	}
+
+	normalized := *s3Cfg
+	normalized.Prefix = prefix
+	return &normalized, nil
+}
+
+func isValidS3SecretRefs(refs *S3SecretRefs) bool {
+	if refs == nil {
+		return true
+	}
+	if !isValidObjectName(refs.Name) {
+		return false
+	}
+	return isValidSecretKey(refs.AccessKeyIDKey) && isValidSecretKey(refs.SecretAccessKeyKey)
+}
+
+func isValidServiceAccountName(name string) bool {
+	if name == "" {
+		return true
+	}
+	return isValidObjectName(name)
+}
+
+func isValidObjectName(name string) bool {
+	return len(name) > 0 && len(name) <= 253 && secretNamePattern.MatchString(name)
+}
+
+func isValidSecretKey(key string) bool {
+	return len(key) > 0 && len(key) <= 253 && secretKeyPattern.MatchString(key)
+}
+
 func stageArtifactPaths(workflowID, stage string) (string, string) {
 	workflowDir := path.Join(dataMountPath, "workflows", workflowID)
 
@@ -199,12 +285,16 @@ func stageArtifactPaths(workflowID, stage string) (string, string) {
 func buildJobPodTemplate(workflowID, stage, inputPath, outputPath string, cfg JobConfig) corev1.PodTemplateSpec {
 	podSpec := corev1.PodSpec{
 		RestartPolicy:                corev1.RestartPolicyNever,
+		ServiceAccountName:           cfg.WorkerServiceAccount,
 		AutomountServiceAccountToken: boolPtr(false),
 		SecurityContext:              newPodSecurityContext(),
 		Containers: []corev1.Container{
 			buildJobContainer(stage, inputPath, outputPath, cfg),
 		},
-		Volumes: []corev1.Volume{
+	}
+
+	if cfg.S3 == nil {
+		podSpec.Volumes = []corev1.Volume{
 			{
 				Name: dataVolumeName,
 				VolumeSource: corev1.VolumeSource{
@@ -213,10 +303,10 @@ func buildJobPodTemplate(workflowID, stage, inputPath, outputPath string, cfg Jo
 					},
 				},
 			},
-		},
+		}
 	}
 
-	if !cfg.SharedStorage {
+	if cfg.S3 == nil && !cfg.SharedStorage {
 		podSpec.Affinity = controlPlanePodAffinity(cfg.Instance)
 	}
 
@@ -240,12 +330,15 @@ func buildJobContainer(stage, inputPath, outputPath string, cfg JobConfig) corev
 		Args:            []string{stage, "--input", inputPath, "--output", outputPath},
 		SecurityContext: newContainerSecurityContext(),
 		Resources:       defaultJobResources(),
-		VolumeMounts: []corev1.VolumeMount{
+	}
+
+	if cfg.S3 == nil {
+		container.VolumeMounts = []corev1.VolumeMount{
 			{
 				Name:      dataVolumeName,
 				MountPath: dataMountPath,
 			},
-		},
+		}
 	}
 
 	if cfg.Artifacts != nil {
@@ -261,19 +354,53 @@ func buildJobContainer(stage, inputPath, outputPath string, cfg JobConfig) corev
 		)
 	}
 
+	if cfg.S3 != nil {
+		container.Env = appendS3JobEnv(container.Env, cfg.S3)
+	}
+
 	if cfg.ProviderSecret != nil {
-		container.Env = append(container.Env, corev1.EnvVar{
-			Name: executor.EnvProviderAPIKey,
-			ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: cfg.ProviderSecret.Name},
-					Key:                  cfg.ProviderSecret.Key,
-				},
-			},
-		})
+		container.Env = append(container.Env, secretEnvVar(executor.EnvProviderAPIKey, cfg.ProviderSecret.Name, cfg.ProviderSecret.Key))
 	}
 
 	return container
+}
+
+func appendS3JobEnv(env []corev1.EnvVar, s3Cfg *S3JobConfig) []corev1.EnvVar {
+	env = append(env,
+		corev1.EnvVar{Name: config.EnvStorageType, Value: config.StorageTypeS3},
+		corev1.EnvVar{Name: config.EnvS3Bucket, Value: s3Cfg.Bucket},
+		corev1.EnvVar{Name: config.EnvS3Region, Value: s3Cfg.Region},
+	)
+
+	if s3Cfg.Prefix != "" {
+		env = append(env, corev1.EnvVar{Name: config.EnvS3Prefix, Value: s3Cfg.Prefix})
+	}
+	if s3Cfg.Endpoint != "" {
+		env = append(env, corev1.EnvVar{Name: config.EnvS3Endpoint, Value: s3Cfg.Endpoint})
+	}
+	if s3Cfg.ForcePathStyle {
+		env = append(env, corev1.EnvVar{Name: config.EnvS3ForcePathStyle, Value: "true"})
+	}
+	if s3Cfg.Credentials != nil {
+		env = append(env,
+			secretEnvVar("AWS_ACCESS_KEY_ID", s3Cfg.Credentials.Name, s3Cfg.Credentials.AccessKeyIDKey),
+			secretEnvVar("AWS_SECRET_ACCESS_KEY", s3Cfg.Credentials.Name, s3Cfg.Credentials.SecretAccessKeyKey),
+		)
+	}
+
+	return env
+}
+
+func secretEnvVar(envName, secretName, key string) corev1.EnvVar {
+	return corev1.EnvVar{
+		Name: envName,
+		ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+				Key:                  key,
+			},
+		},
+	}
 }
 
 func newPodSecurityContext() *corev1.PodSecurityContext {

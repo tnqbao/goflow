@@ -115,6 +115,44 @@ func TestAuthConfiguration(t *testing.T) {
 	}
 }
 
+func TestStorageS3Configuration(t *testing.T) {
+	clearConfigEnv(t)
+
+	t.Setenv(EnvStorageType, "nfs")
+	if _, err := Load(); err == nil {
+		t.Fatal("accepted unsupported storage type")
+	}
+
+	t.Setenv(EnvStorageType, StorageTypeS3)
+	if _, err := Load(); err == nil {
+		t.Fatal("accepted S3 storage without bucket and region")
+	}
+
+	t.Setenv(EnvS3Bucket, "kubereel-prod-artifacts")
+	t.Setenv(EnvS3Region, "us-west-2")
+	t.Setenv(EnvS3Prefix, "/cluster-1/")
+	t.Setenv(EnvS3Endpoint, "https://s3.example.com")
+	t.Setenv(EnvS3ForcePathStyle, "true")
+	t.Setenv(EnvS3CredentialsSecret, "s3-creds")
+	t.Setenv(EnvExecutionMode, "kubernetes")
+	t.Setenv(EnvNamespace, "kubereel")
+	t.Setenv(EnvWorkerServiceAccount, "kubereel-worker")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() S3 config error = %v", err)
+	}
+	if cfg.Storage.Type != StorageTypeS3 || cfg.Storage.S3.Prefix != "cluster-1" || !cfg.Storage.S3.ForcePathStyle {
+		t.Fatalf("unexpected S3 storage config = %+v", cfg.Storage)
+	}
+	if cfg.Storage.S3.AccessKeyIDKey != "accessKeyId" || cfg.Storage.S3.SecretAccessKeyKey != "secretAccessKey" {
+		t.Fatalf("unexpected S3 credential key defaults = %+v", cfg.Storage.S3)
+	}
+	if cfg.Kubernetes.WorkerServiceAccount != "kubereel-worker" {
+		t.Fatalf("unexpected worker service account = %q", cfg.Kubernetes.WorkerServiceAccount)
+	}
+}
+
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
 
@@ -135,6 +173,16 @@ func clearConfigEnv(t *testing.T) {
 		EnvAuthBootstrapUsername,
 		EnvAuthBootstrapPassword,
 		EnvAuthSetupToken,
+		EnvStorageType,
+		EnvS3Bucket,
+		EnvS3Region,
+		EnvS3Prefix,
+		EnvS3Endpoint,
+		EnvS3ForcePathStyle,
+		EnvS3CredentialsSecret,
+		EnvS3AccessKeyIDKey,
+		EnvS3SecretAccessKeyKey,
+		EnvWorkerServiceAccount,
 	} {
 		t.Setenv(envName, "")
 	}

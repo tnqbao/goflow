@@ -66,9 +66,13 @@ kubectl -n kubereel get videorun horror-shorts-demo -w
 | --- | --- | --- |
 | `image.repository` | `iamqbao/kubereel` | Container image repository for control plane and Jobs |
 | `image.tag` | `"0.1.0"` | Pinned image tag (`latest` is rejected) |
-| `storage.size` | `10Gi` | PVC size for `/data` |
-| `storage.accessMode` | `ReadWriteOnce` | Use `ReadWriteMany` for multi-node Job scheduling |
+| `storage.type` | `pvc` | `pvc` (filesystem) or `s3` (AWS S3 / S3-compatible multi-node storage) |
+| `storage.size` | `10Gi` | Control-plane PVC size for `/data` |
+| `storage.accessMode` | `ReadWriteOnce` | Use `ReadWriteMany` for multi-node PVC scheduling (not needed when `storage.type=s3`) |
 | `storage.existingClaim` | `""` | Existing PVC name (must match `storage.accessMode`) |
+| `storage.s3.bucket` | `""` | S3 bucket name (required when `storage.type=s3`) |
+| `storage.s3.region` | `""` | S3 region (required when `storage.type=s3`) |
+| `storage.s3.existingSecret` | `""` | Optional Secret for S3-compatible credentials (leave empty for EKS Workload Identity) |
 | `storage.maxArtifactBytes` | `1073741824` | Max size per artifact (1 GiB) |
 | `storage.retentionSeconds` | `0` | Expiry for completed `VideoRun` artifacts (`0` disables) |
 | `execution.maxConcurrentJobs` | `5` | Max concurrent Kubernetes Jobs |

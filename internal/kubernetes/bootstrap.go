@@ -99,6 +99,8 @@ func buildJobConfig(cfg config.Config) (JobConfig, error) {
 		Claim:                   k8sCfg.PVCName,
 		Instance:                k8sCfg.InstanceName,
 		SharedStorage:           k8sCfg.SharedStorage,
+		S3:                      buildS3JobConfig(cfg.Storage),
+		WorkerServiceAccount:    k8sCfg.WorkerServiceAccount,
 		PullPolicy:              corev1.PullPolicy(k8sCfg.ImagePullPolicy),
 		TTLSecondsAfterFinished: k8sCfg.JobTTLSeconds,
 		Artifacts: &ArtifactConfig{
@@ -113,6 +115,29 @@ func buildJobConfig(cfg config.Config) (JobConfig, error) {
 	}
 
 	return jobCfg, nil
+}
+
+func buildS3JobConfig(storageCfg config.StorageConfig) *S3JobConfig {
+	if storageCfg.Type != config.StorageTypeS3 {
+		return nil
+	}
+
+	s3Cfg := &S3JobConfig{
+		Bucket:         storageCfg.S3.Bucket,
+		Region:         storageCfg.S3.Region,
+		Prefix:         storageCfg.S3.Prefix,
+		Endpoint:       storageCfg.S3.Endpoint,
+		ForcePathStyle: storageCfg.S3.ForcePathStyle,
+	}
+	if storageCfg.S3.CredentialsSecret != "" {
+		s3Cfg.Credentials = &S3SecretRefs{
+			Name:               storageCfg.S3.CredentialsSecret,
+			AccessKeyIDKey:     storageCfg.S3.AccessKeyIDKey,
+			SecretAccessKeyKey: storageCfg.S3.SecretAccessKeyKey,
+		}
+	}
+
+	return s3Cfg
 }
 
 func newClusterClients(namespace string) (clusterClients, error) {
@@ -165,6 +190,10 @@ func verifyClusterAccess(ctx context.Context, clients clusterClients, namespace 
 		return fmt.Errorf("verify VideoWorkflow access: %w", err)
 	}
 
+	if jobCfg.S3 != nil {
+		return verifyS3StorageAccess(probeCtx, clients, namespace, jobCfg.S3)
+	}
+
 	claim, err := clients.core.PersistentVolumeClaims(namespace).Get(probeCtx, jobCfg.Claim, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("verify Kubernetes storage: %w", err)
@@ -172,6 +201,22 @@ func verifyClusterAccess(ctx context.Context, clients clusterClients, namespace 
 
 	if !SupportsStorageAccessModes(claim.Spec.AccessModes, jobCfg.SharedStorage) {
 		return fmt.Errorf("PVC access modes do not support configured workflow placement")
+	}
+
+	return nil
+}
+
+func verifyS3StorageAccess(ctx context.Context, clients clusterClients, namespace string, s3Cfg *S3JobConfig) error {
+	if s3Cfg.Credentials == nil {
+		return nil
+	}
+
+	secret, err := clients.core.Secrets(namespace).Get(ctx, s3Cfg.Credentials.Name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("verify S3 credentials secret %q: %w", s3Cfg.Credentials.Name, err)
+	}
+	if len(secret.Data[s3Cfg.Credentials.AccessKeyIDKey]) == 0 || len(secret.Data[s3Cfg.Credentials.SecretAccessKeyKey]) == 0 {
+		return fmt.Errorf("S3 credentials secret %q is missing required keys", s3Cfg.Credentials.Name)
 	}
 
 	return nil

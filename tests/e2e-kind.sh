@@ -164,6 +164,18 @@ assert run["status"]["steps"][0]["providerRequestID"] == "request-1"
 assert run["status"]["artifacts"] == ["artifact-1"]
 PY
 kubectl --kubeconfig "$kubeconfig" -n kubereel-test patch videorun sample-run --type=merge -p '{"spec":{"cancelRequested":true}}'
+if kubectl --kubeconfig "$kubeconfig" -n kubereel-test patch videorun sample-run --subresource=status --type=merge \
+  -p '{"status":{"steps":[{"name":"script","phase":"Running","jobConfig":{"image":"kubereel:test","instance":"kubereel","sharedStorage":false,"storageType":"s3","pullPolicy":"Never","ttlSeconds":60}}]}}' \
+  >"$workdir/s3-invalid.log" 2>&1; then
+  printf 'S3 jobConfig without bucket/region was accepted\n' >&2
+  exit 1
+fi
+if ! grep -q 'S3 jobs require s3Bucket and s3Region' "$workdir/s3-invalid.log"; then
+  cat "$workdir/s3-invalid.log" >&2
+  exit 1
+fi
+kubectl --kubeconfig "$kubeconfig" -n kubereel-test patch videorun sample-run --subresource=status --type=merge \
+  -p '{"status":{"steps":[{"name":"script","phase":"Running","jobConfig":{"image":"kubereel:test","instance":"kubereel","sharedStorage":false,"storageType":"s3","s3Bucket":"kubereel-cloud","s3Region":"us-west-2","workerServiceAccount":"kubereel-worker","pullPolicy":"Never","ttlSeconds":60}}]}}' >/dev/null
 cat >"$workdir/reconcile-runs.yaml" <<'YAML'
 apiVersion: kubereel.io/v1alpha1
 kind: VideoRun
