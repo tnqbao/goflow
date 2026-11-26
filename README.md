@@ -141,7 +141,12 @@ helm package ./charts/kubereel
 helm push kubereel-chart-0.1.0.tgz oci://registry-1.docker.io/iamqbao
 ```
 
-CI/CD (`.github/workflows/pipeline.yml`) automatically runs `build` -> `test` -> `push` to publish verified container images on pushes to `develop`, `main`, and `v*` tags.
+CI/CD (`.github/workflows/pipeline.yml`) automatically runs `build` -> `test` -> `push` -> `release`:
+
+- On pushes to `develop` and `main`: builds, tests (Go race detector, Helm tests, Kind E2E), and pushes the Docker image.
+- On semver tags (`v*`, e.g., `v0.1.0`): verifies `Chart.yaml` and `values.yaml` version alignment, pushes both the container image and OCI Helm chart (`oci://registry-1.docker.io/iamqbao/kubereel-chart`), and publishes a GitHub Release with `CHANGELOG.md` and `SHA256SUMS`.
+
+Run `./scripts/release-check.sh v0.1.0` before tagging. See [CHANGELOG.md](CHANGELOG.md) and [docs/release.md](docs/release.md) for the complete MVP release checklist.
 
 ---
 

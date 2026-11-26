@@ -32,6 +32,27 @@ jobs:
           npm run build --prefix web
           test -z "$(git status --porcelain -- internal/web/dashboard)"
 
+      - name: Verify release tag version alignment
+        if: github.ref_type == 'tag'
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - "$RELEASE_TAG" <<'PY'
+          import pathlib, re, sys
+          expected = sys.argv[1].lstrip("v")
+          chart_text = pathlib.Path("charts/kubereel/Chart.yaml").read_text(encoding="utf-8")
+          values_text = pathlib.Path("charts/kubereel/values.yaml").read_text(encoding="utf-8")
+          for label, pattern, text in (
+              ("Chart.yaml version", r'^version:\s*"?([^"\s]+)"?$', chart_text),
+              ("Chart.yaml appVersion", r'^appVersion:\s*"?([^"\s]+)"?$', chart_text),
+              ("values.yaml image.tag", r'^\s+tag:\s*"?([^"\s]+)"?$', values_text),
+          ):
+              match = re.search(pattern, text, re.MULTILINE)
+              if not match or match.group(1) != expected:
+                  raise SystemExit(f"{label} does not match release tag {expected!r}")
+          print(f"Release tag {expected} matches Chart.yaml and values.yaml")
+          PY
+
       - name: Check Go formatting and vet
         run: |
           go fmt ./... && git diff --exit-code
@@ -115,6 +136,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        if: github.ref_type == 'tag'
+
+      - uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+        if: github.ref_type == 'tag'
+        with:
+          version: v3.17.3
+
       - name: Download tested Docker image artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -168,3 +197,54 @@ jobs:
             docker tag "$source_image" "${repo}:${safe_branch}"
             docker push "${repo}:${safe_branch}"
           fi
+
+      - name: Package and push Helm chart (OCI) on release tags
+        if: github.ref_type == 'tag'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/release"
+          helm package ./charts/kubereel --destination "${RUNNER_TEMP}/release"
+          (cd "${RUNNER_TEMP}/release" && sha256sum kubereel-chart-*.tgz > SHA256SUMS)
+          owner=$(printf '%s' "$DOCKERHUB_USERNAME" | tr '[:upper:]' '[:lower:]')
+          printf '%s' "$DOCKERHUB_TOKEN" | helm registry login registry-1.docker.io --username "$DOCKERHUB_USERNAME" --password-stdin
+          helm push "${RUNNER_TEMP}/release"/kubereel-chart-*.tgz "oci://registry-1.docker.io/${owner}"
+
+      - name: Upload release chart artifacts
+        if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kubereel-release-assets
+          path: ${{ runner.temp }}/release/*
+          retention-days: 1
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [push]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - name: Download release chart artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: kubereel-release-assets
+          path: ${{ runner.temp }}/release
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          gh release create "$RELEASE_TAG" \
+            "${RUNNER_TEMP}/release"/* \
+            --title "KubeReel ${RELEASE_TAG}" \
+            --notes-file CHANGELOG.md \
+            --verify-tag
