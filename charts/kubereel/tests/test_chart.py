@@ -95,7 +95,7 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(env["JOB_TTL_SECONDS"], "86400")
         self.assertEqual(env["AUTH_SESSION_TTL_SECONDS"], "86400")
         self.assertNotIn("AUTH_BOOTSTRAP_PASSWORD", env)
-        self.assertEqual(container["image"], "iamqbao/kubereel:0.1.0")
+        self.assertEqual(container["image"], "iamqbao/kubereel:0.1.3")
         self.assertEqual(env["JOB_IMAGE"], container["image"])
         self.assertEqual(env["SHARED_STORAGE"], "false")
         self.assertEqual(env["PVC_NAME"], docs["PersistentVolumeClaim"]["metadata"]["name"])

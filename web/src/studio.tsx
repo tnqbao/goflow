@@ -601,7 +601,7 @@ export function Studio() {
                       Open in Media Library
                     </a>
                     <a
-                      className="text-button"
+                      className="button secondary"
                       href={`#/executions/${encodeURIComponent(activeRun.id)}`}
                     >
                       Inspect logs
@@ -780,7 +780,7 @@ function QuickKeyModal({
       }
       close={close}
     >
-      <form className="form" onSubmit={(e) => void handleSave(e)}>
+      <form className="action-form" onSubmit={(e) => void handleSave(e)}>
         {err && <Alert>{err}</Alert>}
         <label>
           API Key
@@ -795,8 +795,8 @@ function QuickKeyModal({
         </label>
         <label>
           Default Models
-          <input
-            type="text"
+          <textarea
+            rows={2}
             value={modelsText}
             onChange={(e) => setModelsText(e.target.value)}
           />

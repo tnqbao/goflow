@@ -4,6 +4,20 @@ All notable changes to KubeReel are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and KubeReel adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] — 1-Click AI Video Studio & Official Release
+
+### Added
+
+- **1-Click AI Video Studio (`#/studio` default landing experience):**
+  - Streamlined Dark AI Studio UI making **Create Video** the default dashboard screen while keeping the React Flow DAG editor available under **Workflows**.
+  - Inline 1-step **Connect API Key** quick-connect bar for **fal.ai** (Image & Video AI) and **Google Gemini** (Script AI), alongside built-in **$0 Mock Test** mode.
+  - Real end-to-end **Reference Image** support: upload PNG/JPEG/WebP reference images (`POST/GET /api/v1/artifacts/references`, up to 10 MiB, magic-byte validated, path-traversal safe) directly into `fal.ai` Image-to-Video, or use **Auto Reference Frame** generation, **Style Presets**, **Starter Prompts**, and **Reference Notes**.
+  - Visual aspect ratio selector (`9:16`, `16:9`, `1:1`, `4:5`), scene count toggle (`1 Clip` / `2 Clips`), live Kubernetes step-by-step progress stepper, inline MP4 player, and recent generated videos strip.
+- **One-Command Local Startup:**
+  - Added `scripts/dev-up.sh` and `scripts/dev-down.sh` for 1-command local Kind + Helm + Studio UI startup and teardown.
+- **Visual Polish & Theme Consistency:**
+  - Unified Dark AI Studio theme across `/login`, `/setup`, `/dashboard`, native `<dialog>` modals, Media Library cards/tabs, and interactive controls.
+
 ## [0.1.0] — MVP Release
 
 ### Added

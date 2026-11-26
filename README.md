@@ -36,7 +36,7 @@ Install directly from Docker Hub OCI registry (zero extra configuration required
 
 ```sh
 helm install kubereel oci://registry-1.docker.io/iamqbao/kubereel-chart \
-  --version 0.1.0 \
+  --version 0.1.3 \
   --namespace kubereel \
   --create-namespace
 ```
@@ -79,7 +79,7 @@ kubectl -n kubereel get videorun horror-shorts-demo -w
 | Key | Default | Description |
 | --- | --- | --- |
 | `image.repository` | `iamqbao/kubereel` | Container image repository for control plane and Jobs |
-| `image.tag` | `"0.1.0"` | Pinned image tag (`latest` is rejected) |
+| `image.tag` | `"0.1.3"` | Pinned image tag (`latest` is rejected) |
 | `storage.type` | `pvc` | `pvc` (filesystem) or `s3` (AWS S3 / S3-compatible multi-node storage) |
 | `storage.size` | `10Gi` | Control-plane PVC size for `/data` |
 | `storage.accessMode` | `ReadWriteOnce` | Use `ReadWriteMany` for multi-node PVC scheduling (not needed when `storage.type=s3`) |
@@ -160,7 +160,7 @@ CI/CD (`.github/workflows/pipeline.yml`) automatically runs `build` -> `test` ->
 - On pushes to `develop` and `main`: builds, tests (Go race detector, Helm tests, Kind E2E), and pushes the Docker image.
 - On semver tags (`v*`, e.g., `v0.1.0`): verifies `Chart.yaml` and `values.yaml` version alignment, pushes both the container image and OCI Helm chart (`oci://registry-1.docker.io/iamqbao/kubereel-chart`), and publishes a GitHub Release with `CHANGELOG.md` and `SHA256SUMS`.
 
-Run `./scripts/release-check.sh v0.1.0` before tagging. See [CHANGELOG.md](CHANGELOG.md) and [docs/release.md](docs/release.md) for the complete MVP release checklist.
+Run `./scripts/release-check.sh v0.1.3` before tagging. See [CHANGELOG.md](CHANGELOG.md) and [docs/release.md](docs/release.md) for the complete MVP release checklist.
 
 ---
 
