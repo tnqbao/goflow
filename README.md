@@ -16,6 +16,20 @@ Kubernetes state is managed via three CRDs (`VideoWorkflow`, `VideoRun`, `VideoP
 
 ---
 
+## Quick Start — Local 1-Command (Kind + Studio UI)
+
+Start the full KubeReel Studio locally (builds image, creates/reuses Kind cluster, bootstraps dev admin credentials, installs Helm chart, and forwards `http://localhost:8080`):
+
+```sh
+./scripts/dev-up.sh
+```
+
+Stop and remove the local Kind cluster when finished:
+
+```sh
+./scripts/dev-down.sh
+```
+
 ## Quick Start — Kubernetes (Helm via Docker Hub)
 
 Install directly from Docker Hub OCI registry (zero extra configuration required on clusters with a default `StorageClass`):
